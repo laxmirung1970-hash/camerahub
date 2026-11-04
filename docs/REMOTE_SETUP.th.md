@@ -29,20 +29,20 @@ tailscale funnel --bg 17801
 
 ## 2. บอกเครื่องบ้านว่าให้รับคำขอจาก Vercel
 
-แก้ไฟล์ `compose.windows-live.yaml` ใต้ `environment:` ของ `app` เพิ่ม 2 บรรทัด (คงบรรทัดเดิมไว้ทั้งหมด):
+แก้ไฟล์ `compose.windows-live.yaml` ใต้ `environment:` ของ `app` เพิ่ม 1 บรรทัด (คงบรรทัดเดิมไว้ทั้งหมด ทำให้แล้วในรอบ 4 พ.ย.):
 
 ```yaml
-      APP_ALLOWED_ORIGINS: "https://camerahub-<ชื่อทีม>.vercel.app"
-      APP_SECURE_COOKIES: "true"
+      APP_ALLOWED_ORIGINS: "https://camerahub-sigma.vercel.app"
 ```
 
-- ค่า origin ดูจากหน้า Vercel project → Domains (ที่ลงท้าย `.vercel.app` ตัวหลัก ไม่ใช่ตัวที่มีรหัสสุ่ม) ใส่ได้หลายค่าคั่นด้วยคอมมา ห้ามมี `/` ท้าย
-- ถ้าใช้ Cloudflare Tunnel ให้เพิ่ม `APP_TRUSTED_PROXY: "127.0.0.1"` ด้วย (Tailscale Funnel ไม่ต้อง)
+- ค่า origin คือโดเมน production ของ Vercel (ดูที่ project → Domains ตัวที่ไม่มีรหัสสุ่ม) ใส่ได้หลายค่าคั่นด้วยคอมมา ห้ามมี `/` ท้าย
+- **ห้ามตั้ง `APP_SECURE_COOKIES: "true"`** บนเครื่อง Windows นี้ เพราะหน้า http://127.0.0.1:17801 จะล็อกอินไม่ได้ (cookie Secure ส่งผ่าน http ไม่ได้) หน้า Vercel ใช้ token ไม่ใช้ cookie จึงไม่ต้องการค่านี้
+- `APP_TRUSTED_PROXY` ไม่ต้องตั้ง (ใน Docker ที่อยู่ของ proxy ไม่คงที่) ผลคือผู้ใช้จากนอกบ้านทุกคนนับ rate limit รวมกัน ซึ่งพอใช้สำหรับเจ้าของคนเดียว
 
 แล้วรัน `Start-CameraHub-Live.cmd` อีกครั้ง (port 17801 และข้อมูลเดิมไม่เปลี่ยน) ตรวจว่าได้ผล:
 
 ```powershell
-curl.exe -s -X OPTIONS -H "Origin: https://camerahub-<ชื่อทีม>.vercel.app" -D - -o NUL http://127.0.0.1:17801/api/login
+curl.exe -s -X OPTIONS -H "Origin: https://camerahub-sigma.vercel.app" -D - -o NUL http://127.0.0.1:17801/api/login
 ```
 
 ต้องเห็นบรรทัด `Access-Control-Allow-Origin: https://camerahub-...` ถ้าไม่เห็น แปลว่า origin สะกดไม่ตรง
@@ -52,7 +52,7 @@ curl.exe -s -X OPTIONS -H "Origin: https://camerahub-<ชื่อทีม>.ver
 1. https://vercel.com → project **camerahub** → Settings → Environment Variables
 2. Add: Key `VITE_API_BASE` Value `<BACKEND>` (เช่น `https://pc.example.ts.net` ไม่มี `/` ท้าย) เลือก Production
 3. Deployments → เมนู ⋯ ของ deployment ล่าสุด → **Redeploy** (ค่านี้ฝังตอน build จึงต้อง build ใหม่ทุกครั้งที่เปลี่ยน)
-4. เปิด `https://camerahub-<ชื่อทีม>.vercel.app` จากมือถือ ต้องเห็นหน้า login ไม่มีป้าย "ขาดการเชื่อมต่อเครื่องกลาง" ใส่รหัสเจ้าของเดิม
+4. เปิด `https://camerahub-sigma.vercel.app` จากมือถือ ต้องเห็นหน้า login ไม่มีป้าย "ขาดการเชื่อมต่อเครื่องกลาง" ใส่รหัสเจ้าของเดิม
 
 ถ้าเห็นป้ายขาดการเชื่อมต่อ: เปิด `<BACKEND>/api/health` บนมือถือก่อน (ข้อ 1 ผ่านไหม) แล้วดู Console ของเบราว์เซอร์ ถ้าเป็น CORS error = ข้อ 2 ยังไม่ตรง
 
