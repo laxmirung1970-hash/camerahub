@@ -28,6 +28,8 @@ Windows/Docker ต้องเปิดระหว่างใช้งาน �
 
 หยุด: `scripts/Stop-Live.ps1` · ตรวจสถานะ: `scripts/Check-System.ps1 -Mode windows-live` ข้อมูลอยู่ใน volumes `camerahub-windows-live_live-data` และ `camerahub-windows-live_live-gateway` ไม่รวมในชุดส่งมอบ ไม่ใช้ `down -v` เพราะลบข้อมูล การย้ายทะเบียนกล้องไป NAS ใช้สำรอง/กู้คืนโหมด live ตามคู่มือด้านล่าง
 
+ตัวเฝ้า relay (โหมด `docker-relay`): `scripts/Install-LiveWatchdog.ps1` ลงงานตั้งเวลาของผู้ใช้ชื่อ "CameraHub Live Watchdog" (ไม่ต้องสิทธิ์ admin) รัน `scripts/Watch-Live.ps1` ตอน logon และทุก 5 นาที ถ้า container live ทำงานอยู่แต่ตัวส่งต่อ UDP ของกล้อง Xiaomi ไม่ตอบ จะปิดแล้วเปิดใหม่เอง (อาการบนจอคือ "ตัวกลางวิดีโอเชื่อมต่อไม่ได้" ทุกกล้อง) หลัง `Stop-Live.ps1` จะไม่เปิดให้ บันทึกเฉพาะตอนลงมือใน `data/windows-live-gateway/watchdog.log` และ stderr ของ relay ใน `relay-stderr.log` ถอด: `scripts/Install-LiveWatchdog.ps1 -Uninstall`
+
 ## DS223: ทำเมื่อพร้อมทดสอบจริง
 
 ยังไม่ได้ทำขั้นตอนเหล่านี้บน NAS ของคุณ

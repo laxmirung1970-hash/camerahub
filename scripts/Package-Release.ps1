@@ -19,7 +19,7 @@ try {
     foreach ($taskName in @('go2rtc.exe','go2rtc.exe.sha256')) { Copy-Item -LiteralPath (Join-Path $taskRoot ('runtime/windows/' + $taskName)) -Destination (Join-Path $taskWindows 'runtime/windows') }
     foreach ($taskName in @('docs','media','vendor')) { Copy-Item -LiteralPath (Join-Path $taskRoot $taskName) -Destination $taskWindows -Recurse }
     New-Item -ItemType Directory -Force -Path (Join-Path $taskWindows 'scripts') | Out-Null
-    foreach ($taskName in @('Start-Demo.ps1','Stop-Demo.ps1','Start-Live.ps1','Stop-Live.ps1','Show-SetupCode.ps1','Check-System.ps1','Windows-Gateway.ps1','Windows-Relay.ps1','windows-udp-relay.mjs','Enable-WindowsGateway.ps1','Disable-WindowsGateway.ps1')) { Copy-Item -LiteralPath (Join-Path $PSScriptRoot $taskName) -Destination (Join-Path $taskWindows 'scripts') }
+    foreach ($taskName in @('Start-Demo.ps1','Stop-Demo.ps1','Start-Live.ps1','Stop-Live.ps1','Show-SetupCode.ps1','Check-System.ps1','Windows-Gateway.ps1','Windows-Relay.ps1','windows-udp-relay.mjs','Enable-WindowsGateway.ps1','Disable-WindowsGateway.ps1','Watch-Live.ps1','Install-LiveWatchdog.ps1')) { Copy-Item -LiteralPath (Join-Path $PSScriptRoot $taskName) -Destination (Join-Path $taskWindows 'scripts') }
     Set-Content -LiteralPath (Join-Path $taskWindows 'Load-Images.ps1') -Encoding UTF8 -Value @'
 $ErrorActionPreference = 'Stop'
 docker load -i (Join-Path $PSScriptRoot 'camerahub-windows-images.tar')

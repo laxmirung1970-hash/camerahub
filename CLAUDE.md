@@ -41,7 +41,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Build-NAS.ps1
 
 Running modes:
 - **Demo** (synthetic cameras, `127.0.0.1:17800`): `scripts/Start-Demo.ps1 [-Rebuild]`, stop with `scripts/Stop-Demo.ps1`.
-- **Live** (owner's real cameras, `127.0.0.1:17801`): `Start-CameraHub-Live.cmd` → `scripts/Start-Live.ps1`, stop with `scripts/Stop-Live.ps1`. Status: `scripts/Check-System.ps1 -Mode windows-live`.
+- **Live** (owner's real cameras, `127.0.0.1:17801`): `Start-CameraHub-Live.cmd` → `scripts/Start-Live.ps1`, stop with `scripts/Stop-Live.ps1`. Status: `scripts/Check-System.ps1 -Mode windows-live`. A per-user scheduled task "CameraHub Live Watchdog" (`scripts/Install-LiveWatchdog.ps1`, installed on this PC) runs `scripts/Watch-Live.ps1` every 5 min to restart the Node UDP relay if it stops answering while the live app container runs; its log is `data/windows-live-gateway/watchdog.log`.
 
 Both use image tag `camerahub/app:1.0.0-amd64`; redeploying the app means rebuilding that image (`docker build -t camerahub/app:1.0.0-amd64 .`) and restarting the compose app service. Before replacing the live image, tag the current one for rollback (convention: `camerahub/app:before-<change>-<yyyymmdd>`) and record it in `private/NEXT_SESSION.md`.
 
