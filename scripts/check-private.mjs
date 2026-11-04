@@ -28,7 +28,7 @@ export const RULES = [
   {name: 'token-assign', pattern: /\b(token|secret|password|passwd|api[_-]?key)\s*[=:]\s*["']?[A-Za-z0-9_\-]{16,}/gi, allow: /fixture|private|do-not-expose|secret-camera-password|example/i},
   {name: 'hex64', pattern: /\b[a-f0-9]{64}\b/g, allow: /sha-?256|sha256sum|digest|image id|manifest|certificate|apk|'a'\.repeat|'b'\.repeat/i},
   {name: 'xiaomi-did', pattern: /\bdid=\d{6,}/g},
-  {name: 'tailnet-host', pattern: /\b[a-z0-9-]+\.[a-z0-9-]+\.ts\.net\b/gi, allow: /example|your-tailnet|โดเมน/i},
+  {name: 'tailnet-host', pattern: /\b[a-z0-9-]+\.[a-z0-9-]+\.ts\.net\b/gi, allow: /example\.ts\.net|your-tailnet/i},
   {name: 'cf-tunnel', pattern: /trycloudflare\.com|cfargotunnel\.com/g},
   {name: 'private-key', pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----/g},
   {name: 'windows-user-path', pattern: /[A-Z]:\\Users\\[^\\\s"']+/g},

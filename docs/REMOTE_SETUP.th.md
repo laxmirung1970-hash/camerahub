@@ -2,7 +2,7 @@
 
 หน้าเว็บอยู่บน Vercel แต่กล้อง วิดีโอ และฐานข้อมูลอยู่ที่เครื่อง Windows ที่บ้าน (port 17801) เบราว์เซอร์จากนอกบ้านจึงต้องเข้าถึงเครื่องบ้านผ่าน HTTPS ก่อน ทำตามลำดับนี้ครั้งเดียว
 
-**สถานะ 4 พ.ย. 2026 ค่ำ: ข้อ 1–3 ทำให้ครบแล้ว** (Tailscale Funnel ที่ `https://desktop-uu0nnnd.taild9ca7c.ts.net`, `APP_ALLOWED_ORIGINS` บนเครื่องกลาง, `VITE_API_BASE` บน Vercel + redeploy) เหลือเจ้าของเปิด https://camerahub-sigma.vercel.app จากมือถือ/Chrome แล้วล็อกอินตรวจภาพจริง (ข้อ 4) ขั้นตอนด้านล่างเก็บไว้สำหรับทำซ้ำเมื่อเปลี่ยนเครื่องหรือโดเมน
+**สถานะ 4 พ.ย. 2026 ค่ำ: ข้อ 1–3 ทำให้ครบแล้ว** (Tailscale Funnel (ที่อยู่จริงบันทึกใน `private/NEXT_SESSION.md`), `APP_ALLOWED_ORIGINS` บนเครื่องกลาง, `VITE_API_BASE` บน Vercel + redeploy) เหลือเจ้าของเปิด https://camerahub-sigma.vercel.app จากมือถือ/Chrome แล้วล็อกอินตรวจภาพจริง (ข้อ 4) ขั้นตอนด้านล่างเก็บไว้สำหรับทำซ้ำเมื่อเปลี่ยนเครื่องหรือโดเมน
 
 ที่ทำให้แล้ว: GitHub repo `https://github.com/laxmirung1970-hash/camerahub` (สาธารณะ ไม่มีข้อมูลส่วนตัว), Vercel project `camerahub` ผูกกับ repo (Root Directory `web`, build อัตโนมัติทุกครั้งที่ push `main`, ปิด preview build, ปิด Vercel Authentication เพื่อให้เปิดจากมือถือได้) และ backend รองรับ `APP_ALLOWED_ORIGINS` แล้ว
 
