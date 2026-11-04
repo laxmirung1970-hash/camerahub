@@ -23,10 +23,12 @@ npm ci
 npm run build          # tsc -b && vite build
 npm test               # vitest run
 npx vitest run src/reconnectPolicy.test.ts   # single file
+npm run lint           # eslint src (CI runs lint → test → build)
 npm run dev            # Vite on 127.0.0.1, proxies /api to demo app on :17800
 
-# Windows UDP relay test
+# Node script tests (Windows UDP relay, private-data scanner)
 node --test scripts/windows-udp-relay.test.mjs
+node --test scripts/check-private.test.mjs
 
 # Demo-only API/ffprobe integration check (refuses live mode / user-configured owner)
 node scripts/integration.mjs
@@ -54,6 +56,8 @@ Both use image tag `camerahub/app:1.0.0-amd64`; redeploying the app means rebuil
   - `store.go`: discovery **upserts, never deletes**; preserves owner aliases, order, rooms, favorites, profiles. `lastSeen` from video must not be overwritten by inventory sync.
 - **Gateway**: go2rtc pinned to a commit and built from source in `deploy/go2rtc.Dockerfile`, with sha256-checked patches from `vendor/` (Xiaomi control, motor replies, startup, Windows UDP relay). Changing a patch requires updating its hash in the Dockerfile.
 - **Windows live media path**: Go networking on this Windows host hangs on outgoing TCP, and Docker Desktop NAT breaks Xiaomi UDP. Current runtime is `docker-relay`: Linux go2rtc in Docker (`compose.windows-live.yaml` + `compose.windows-relay.yaml`) plus the authenticated Node UDP relay `scripts/windows-udp-relay.mjs` on `127.0.0.1:17993`, only forwarding CS2 UDP to camera IPs in the registry (`relay_hosts.go`). `compose.windows-native.yaml` (native Windows go2rtc) is the older alternative. `Start-Live.ps1` chooses based on state under `data/windows-live-gateway/`.
+- **Cross-origin (Vercel) mode, opt-in**: default is same-origin (Windows live, NAS) with cookie auth. A web build with `VITE_API_BASE=<backend https origin>` (`web/src/api.ts`, `web/vercel.json`) calls the home backend with a Bearer token; the backend only allows it for exact origins in `APP_ALLOWED_ORIGINS` (`config.go`, `auth.go`). Cookie mutations still reject cross-site requests.
+- **CI** (`.github/workflows/ci.yml`): private-data scan, web lint/test/build, backend gofmt/vet/`test -race` on native Go 1.25, relay test. Mirror these locally before pushing.
 - **web/** (React 19 + TS + Vite, Thai UI, IBM Plex Sans Thai): `App.tsx` holds a single display state; pure transitions in `displayState.ts` (tour 4 / tour big / lock 4 / focus 1, pages of 4). `Player.tsx` handles MSE→HLS fallback; `reconnectPolicy.ts` retries forever while visible (10/20/40s then ~60s + jitter) and pauses on auth rejection. Errors render as black tile with reason; LIVE badge only when frames are actually playing. Service worker must never cache API/video.
 - **android-tv/** (Kotlin, Media3, minSdk 26/target 35, appId `local.camerahub.tv`): remote-driven 2×2 grid; state/view/playback/PTZ split into `TvViewingState`, `TvMonitorView`, `TvPlayback`, `TvPtzController`. Max 4 players; one PTZ request in flight, stop before direction/camera change.
 - **deploy/**: NAS compose (HTTPS, Secure cookies, loopback go2rtc). ARM runtime is assembled with `apk --root --no-scripts` so no ARM binaries execute on the build host.
