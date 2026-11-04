@@ -11,7 +11,7 @@ import (
 // A Windows-only transport allowlist derived solely from the saved registry.
 // Never include account credentials or arbitrary LAN addresses in this file.
 func (a *App) writeRelayHosts() error {
-	path := os.Getenv("CAMERAHUB_RELAY_HOSTS_FILE")
+	path := a.cfg.relayHostsFile
 	if path == "" || a.mode != "live" {
 		return nil
 	}

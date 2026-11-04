@@ -30,7 +30,7 @@
 
 ## เชื่อม Vercel
 
-`web/src/api.ts` อ่าน `VITE_API_BASE` (ว่าง = โดเมนเดียวกันตามเดิม) ถ้าตั้งค่า จะล็อกอินแบบ Bearer token เก็บใน localStorage ส่งใน header, hls.js `xhrSetup` และ WebSocket subprotocol `["bearer", token]` ฝั่ง backend ต้องมี `APP_ALLOWED_ORIGINS` (งาน backend แยกต่างหาก ยังไม่ทำในรอบนี้) ไฟล์ `web/vercel.json` + `web/.env.example` พร้อมแล้ว
+`web/src/api.ts` อ่าน `VITE_API_BASE` (ว่าง = โดเมนเดียวกันตามเดิม) ถ้าตั้งค่า จะล็อกอินแบบ Bearer token เก็บใน localStorage ส่งใน header, hls.js `xhrSetup` และ WebSocket subprotocol `["bearer", token]` ฝั่ง backend ต้องมี `APP_ALLOWED_ORIGINS` (ทำแล้วช่วงบ่าย ดู `docs/BACKEND_REFRESH_2026-11-04.th.md`) ไฟล์ `web/vercel.json` + `web/.env.example` พร้อมแล้ว
 
 ## ผลตรวจ (Chrome บน demo 17800 ผ่าน Vite dev + image ที่ build แล้ว)
 

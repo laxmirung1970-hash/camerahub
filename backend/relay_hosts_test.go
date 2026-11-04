@@ -9,9 +9,9 @@ import (
 )
 
 func TestRelayAllowlistOnlySavedPrivateXiaomi(t *testing.T) {
-	a, _ := testApp(t, "live")
 	path := filepath.Join(t.TempDir(), "relay-hosts.json")
 	t.Setenv("CAMERAHUB_RELAY_HOSTS_FILE", path)
+	a, _ := testApp(t, "live")
 	for _, c := range []Camera{{ID: "xiaomi-one", Vendor: "xiaomi", Host: "172.16.0.202"}, {ID: "same-host", Vendor: "xiaomi", Host: "172.16.0.202"}, {ID: "other-private", Vendor: "xiaomi", Host: "10.1.1.4"}, {ID: "public", Vendor: "xiaomi", Host: "8.8.8.8"}, {ID: "tapo", Vendor: "tapo", Host: "172.16.0.92"}} {
 		if a.store.saveCamera(c) != nil {
 			t.Fatal("fixture")

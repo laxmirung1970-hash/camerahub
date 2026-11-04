@@ -684,14 +684,8 @@ func TestHLSPathsStayAuthenticatedAndMalformedJSONRejected(t *testing.T) {
 	if !strings.Contains(p, "/api/media/hls/playlist.m3u8") || !strings.Contains(p, `URI="/api/media/hls/init.mp4`) {
 		t.Fatal(p)
 	}
-	a, h := testApp(t, "demo")
-	cookie := setupOwner(t, a, h)
-	req := httptest.NewRequest("POST", "/api/discover", strings.NewReader(`{}junk`))
-	req.AddCookie(cookie)
+	req := httptest.NewRequest("POST", "/test", strings.NewReader(`{}junk`))
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req) // discover has no body: validate the decoder separately instead
-	req = httptest.NewRequest("POST", "/test", strings.NewReader(`{}junk`))
-	w = httptest.NewRecorder()
 	var v struct{}
 	if readJSON(w, req, &v) || w.Code != 400 {
 		t.Fatal("malformed trailing JSON accepted")

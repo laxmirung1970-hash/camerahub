@@ -20,6 +20,15 @@ type Bridge struct {
 	Client     *http.Client
 	mu         sync.Mutex
 	registered map[string]string
+	// Per-stream locks keep gateway I/O outside mu so one slow registration
+	// does not stall every other camera.
+	inflight map[string]*sync.Mutex
+}
+
+// Only these two message shapes are relayed between browser and gateway.
+type wsMessage struct {
+	Type  string `json:"type"`
+	Value string `json:"value"`
 }
 
 func (b *Bridge) request(ctx context.Context, method, path string, body io.Reader) ([]byte, int, error) {
@@ -101,13 +110,27 @@ func (b *Bridge) ensure(ctx context.Context, c Camera, q string) error {
 	}
 	return b.register(ctx, name, src)
 }
-func (b *Bridge) register(ctx context.Context, name, src string) error {
+func (b *Bridge) streamLock(name string) *sync.Mutex {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.registered == nil {
-		b.registered = map[string]string{}
+	if b.inflight == nil {
+		b.inflight = map[string]*sync.Mutex{}
 	}
-	if b.registered[name] == src {
+	if b.inflight[name] == nil {
+		b.inflight[name] = &sync.Mutex{}
+	}
+	return b.inflight[name]
+}
+func (b *Bridge) cached(name, src string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.registered[name] == src
+}
+func (b *Bridge) register(ctx context.Context, name, src string) error {
+	lock := b.streamLock(name)
+	lock.Lock()
+	defer lock.Unlock()
+	if b.cached(name, src) {
 		_, s, e := b.request(ctx, "GET", "/api/streams?src="+url.QueryEscape(name), nil)
 		if e == nil && s == 200 {
 			return nil
@@ -121,8 +144,20 @@ func (b *Bridge) register(ctx context.Context, name, src string) error {
 	if status >= 300 {
 		return errors.New("gateway registration failed")
 	}
+	b.mu.Lock()
+	if b.registered == nil {
+		b.registered = map[string]string{}
+	}
 	b.registered[name] = src
+	b.mu.Unlock()
 	return nil
+}
+
+// resetCache forces re-registration after the gateway config was replaced.
+func (b *Bridge) resetCache() {
+	b.mu.Lock()
+	b.registered = nil
+	b.mu.Unlock()
 }
 func (b *Bridge) ensureRTC(ctx context.Context, c Camera, quality string) (string, error) {
 	name := streamName(c, quality)
@@ -150,7 +185,7 @@ func (b *Bridge) probe(ctx context.Context, src string) error {
 	_ = conn.SetReadDeadline(deadline)
 	_ = conn.SetWriteDeadline(deadline)
 	conn.SetReadLimit(8 << 20)
-	if err = conn.WriteJSON(map[string]string{"type": "mse", "value": "avc1.640029,avc1.64002A,avc1.640033,hvc1.1.6.L153.B0"}); err != nil {
+	if err = conn.WriteJSON(wsMessage{Type: "mse", Value: "avc1.640029,avc1.64002A,avc1.640033,hvc1.1.6.L153.B0"}); err != nil {
 		return errors.New("stream probe unavailable")
 	}
 	negotiated := false
@@ -160,10 +195,7 @@ func (b *Bridge) probe(ctx context.Context, src string) error {
 			return errors.New("stream probe did not receive video")
 		}
 		if kind == websocket.TextMessage {
-			var msg struct {
-				Type  string `json:"type"`
-				Value string `json:"value"`
-			}
+			var msg wsMessage
 			if json.Unmarshal(data, &msg) != nil || msg.Type == "error" {
 				return errors.New("stream probe failed")
 			}
@@ -235,201 +267,199 @@ func (b *Bridge) checkRTSP(ctx context.Context, source string) string {
 }
 
 func (a *App) mediaCamera(w http.ResponseWriter, r *http.Request) (Camera, bool) {
-	c, e := a.store.camera(r.PathValue("id"))
-	if e != nil {
-		fail(w, 404, "ไม่พบกล้อง")
+	c, found := a.cameraFromPath(w, r)
+	if !found {
 		return c, false
 	}
-	if c.Status == "offline" || c.Status == "auth_expired" {
+	if cameraUnavailable(c) {
 		fail(w, 409, c.Message)
 		return c, false
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	if e = a.bridge.ensure(ctx, c, qualityOf(r)); e != nil {
+	if e := a.bridge.ensure(ctx, c, qualityOf(r)); e != nil {
 		fail(w, 502, "ตัวกลางวิดีโอยังไม่พร้อม กรุณาตรวจสถานะระบบ")
 		return c, false
 	}
 	return c, true
 }
 func (a *App) mediaRoutes(m *http.ServeMux) {
-	m.HandleFunc("POST /api/cameras/{id}/webrtc", a.require(false, func(w http.ResponseWriter, r *http.Request) {
-		if env("APP_WEBRTC", "false") != "true" {
-			fail(w, 409, "WebRTC ยังไม่เปิดใช้ ใช้ MSE หรือ HLS ผ่าน HTTPS")
-			return
-		}
-		c, ok := a.mediaCamera(w, r)
-		if !ok {
-			return
-		}
-		raw, e := limitRead(r.Body, 256*1024)
-		if e != nil {
-			fail(w, 400, "ข้อมูลวิดีโอไม่ถูกต้อง")
-			return
-		}
-		rtc, e := a.bridge.ensureRTC(r.Context(), c, qualityOf(r))
-		if e != nil {
-			fail(w, 502, "เตรียม WebRTC ไม่สำเร็จ")
-			return
-		}
-		req, e := http.NewRequestWithContext(r.Context(), "POST", a.bridge.Base+"/api/webrtc?src="+url.QueryEscape(rtc), strings.NewReader(string(raw)))
-		if e != nil {
-			fail(w, 502, "เปิดวิดีโอไม่สำเร็จ")
-			return
-		}
-		req.Header.Set("Content-Type", "application/sdp")
-		res, e := a.bridge.Client.Do(req)
-		if e != nil {
-			fail(w, 502, "เชื่อมวิดีโอไม่ได้")
-			return
-		}
-		defer res.Body.Close()
-		body, e := limitRead(res.Body, 256*1024)
-		if e != nil || res.StatusCode >= 300 {
-			fail(w, 502, "WebRTC ไม่พร้อม ลองวิธีสำรอง")
-			return
-		}
-		w.Header().Set("Content-Type", "application/sdp")
-		_, _ = w.Write(body)
-	}))
-	m.HandleFunc("GET /api/cameras/{id}/ws", a.require(false, func(w http.ResponseWriter, r *http.Request) {
-		c, ok := a.mediaCamera(w, r)
-		if !ok {
-			return
-		}
-		upstream, e := a.bridge.dialWS(r.Context(), streamName(c, qualityOf(r)))
-		if e != nil {
-			fail(w, 502, "เปิดวิดีโอไม่สำเร็จ")
-			return
-		}
-		defer upstream.Close()
-		upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool {
-			o := r.Header.Get("Origin")
-			if o == "" {
-				return true
-			}
-			u, e := url.Parse(o)
-			return e == nil && u.Host == r.Host
-		}}
-		client, e := upgrader.Upgrade(w, r, nil)
-		if e != nil {
-			return
-		}
-		defer client.Close()
-		client.SetReadLimit(65536)
-		done := make(chan struct{}, 2)
-		// Only negotiated media messages are accepted, never arbitrary gateway commands.
-		go func() {
-			defer func() { done <- struct{}{} }()
-			for {
-				typ, data, e := client.ReadMessage()
-				if e != nil {
-					return
-				}
-				if typ != websocket.TextMessage {
-					return
-				}
-				var msg struct {
-					Type  string `json:"type"`
-					Value string `json:"value"`
-				}
-				if json.Unmarshal(data, &msg) != nil || msg.Type != "mse" {
-					return
-				}
-				if upstream.WriteMessage(typ, data) != nil {
-					return
-				}
-			}
-		}()
-		go func() {
-			defer func() { done <- struct{}{} }()
-			for {
-				typ, data, e := upstream.ReadMessage()
-				if e != nil {
-					return
-				}
-				if typ == websocket.TextMessage {
-					var message struct {
-						Type  string `json:"type"`
-						Value string `json:"value"`
-					}
-					if json.Unmarshal(data, &message) != nil {
-						return
-					}
-					if message.Type == "error" {
-						data, _ = json.Marshal(map[string]string{"type": "error", "value": mediaErrorCategory(message.Value)})
-					} else if message.Type != "mse" {
-						continue
-					}
-				}
-				if client.WriteMessage(typ, data) != nil {
-					return
-				}
-			}
-		}()
-		ticker := time.NewTicker(15 * time.Second)
-		defer ticker.Stop()
-		watching := true
-		for watching {
-			select {
-			case <-done:
+	m.HandleFunc("POST /api/cameras/{id}/webrtc", a.require(false, a.webrtcHandler))
+	m.HandleFunc("GET /api/cameras/{id}/ws", a.require(false, a.wsHandler))
+	m.HandleFunc("GET /api/cameras/{id}/hls", a.require(false, a.hlsPlaylistHandler))
+	m.HandleFunc("GET /api/media/hls/{file}", a.require(false, a.hlsFileHandler))
+}
+func (a *App) webrtcHandler(w http.ResponseWriter, r *http.Request) {
+	if !a.cfg.webRTC {
+		fail(w, 409, "WebRTC ยังไม่เปิดใช้ ใช้ MSE หรือ HLS ผ่าน HTTPS")
+		return
+	}
+	c, ok := a.mediaCamera(w, r)
+	if !ok {
+		return
+	}
+	raw, e := limitRead(r.Body, 256*1024)
+	if e != nil {
+		fail(w, 400, "ข้อมูลวิดีโอไม่ถูกต้อง")
+		return
+	}
+	rtc, e := a.bridge.ensureRTC(r.Context(), c, qualityOf(r))
+	if e != nil {
+		fail(w, 502, "เตรียม WebRTC ไม่สำเร็จ")
+		return
+	}
+	req, e := http.NewRequestWithContext(r.Context(), "POST", a.bridge.Base+"/api/webrtc?src="+url.QueryEscape(rtc), strings.NewReader(string(raw)))
+	if e != nil {
+		fail(w, 502, "เปิดวิดีโอไม่สำเร็จ")
+		return
+	}
+	req.Header.Set("Content-Type", "application/sdp")
+	res, e := a.bridge.Client.Do(req)
+	if e != nil {
+		fail(w, 502, "เชื่อมวิดีโอไม่ได้")
+		return
+	}
+	defer res.Body.Close()
+	body, e := limitRead(res.Body, 256*1024)
+	if e != nil || res.StatusCode >= 300 {
+		fail(w, 502, "WebRTC ไม่พร้อม ลองวิธีสำรอง")
+		return
+	}
+	w.Header().Set("Content-Type", "application/sdp")
+	_, _ = w.Write(body)
+}
+func (a *App) wsOriginOK(r *http.Request) bool {
+	o := r.Header.Get("Origin")
+	if o == "" {
+		return true
+	}
+	u, e := url.Parse(o)
+	return e == nil && (u.Host == r.Host || a.crossOriginAllowed(r))
+}
+func (a *App) wsHandler(w http.ResponseWriter, r *http.Request) {
+	c, ok := a.mediaCamera(w, r)
+	if !ok {
+		return
+	}
+	upstream, e := a.bridge.dialWS(r.Context(), streamName(c, qualityOf(r)))
+	if e != nil {
+		fail(w, 502, "เปิดวิดีโอไม่สำเร็จ")
+		return
+	}
+	defer upstream.Close()
+	// Echo "bearer" so a browser that authenticated via subprotocol accepts the handshake.
+	upgrader := websocket.Upgrader{Subprotocols: []string{"bearer"}, CheckOrigin: a.wsOriginOK}
+	client, e := upgrader.Upgrade(w, r, nil)
+	if e != nil {
+		return
+	}
+	defer client.Close()
+	client.SetReadLimit(65536)
+	done := make(chan struct{}, 2)
+	go func() {
+		defer func() { done <- struct{}{} }()
+		pumpToGateway(client, upstream)
+	}()
+	go func() {
+		defer func() { done <- struct{}{} }()
+		pumpToClient(upstream, client)
+	}()
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	watching := true
+	for watching {
+		select {
+		case <-done:
+			watching = false
+		case <-r.Context().Done():
+			watching = false
+		case <-ticker.C:
+			if _, ok := a.principal(r); !ok {
 				watching = false
-			case <-r.Context().Done():
-				watching = false
-			case <-ticker.C:
-				if _, ok := a.principal(r); !ok {
-					watching = false
-				}
 			}
 		}
-		a.stopCamera(c.ID, principalID(a, r))
-	}))
-	m.HandleFunc("GET /api/cameras/{id}/hls", a.require(false, func(w http.ResponseWriter, r *http.Request) {
-		c, ok := a.mediaCamera(w, r)
-		if !ok {
+	}
+	a.stopCamera(c.ID, principalOf(r).ID)
+}
+
+// Only negotiated media messages are accepted, never arbitrary gateway commands.
+func pumpToGateway(client, upstream *websocket.Conn) {
+	for {
+		typ, data, e := client.ReadMessage()
+		if e != nil || typ != websocket.TextMessage {
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
-		defer cancel()
-		body, status, e := a.bridge.request(ctx, "GET", "/api/stream.m3u8?src="+url.QueryEscape(streamName(c, qualityOf(r)))+"&mp4=all", nil)
-		if e != nil || status != 200 || !strings.Contains(string(body), "#EXTM3U") {
-			fail(w, 502, "สร้างวิดีโอ HLS ไม่สำเร็จ")
+		var msg wsMessage
+		if json.Unmarshal(data, &msg) != nil || msg.Type != "mse" {
 			return
 		}
-		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-		_, _ = w.Write([]byte(rewritePlaylist(string(body))))
-	}))
-	m.HandleFunc("GET /api/media/hls/{file}", a.require(false, func(w http.ResponseWriter, r *http.Request) {
-		file := r.PathValue("file")
-		if file != "playlist.m3u8" && file != "init.mp4" && file != "segment.m4s" && file != "segment.ts" {
-			http.NotFound(w, r)
+		if upstream.WriteMessage(typ, data) != nil {
 			return
 		}
-		q := url.Values{}
-		for _, k := range []string{"id", "n"} {
-			if v := r.URL.Query().Get(k); v != "" && len(v) < 120 {
-				q.Set(k, v)
+	}
+}
+func pumpToClient(upstream, client *websocket.Conn) {
+	for {
+		typ, data, e := upstream.ReadMessage()
+		if e != nil {
+			return
+		}
+		if typ == websocket.TextMessage {
+			var message wsMessage
+			if json.Unmarshal(data, &message) != nil {
+				return
+			}
+			if message.Type == "error" {
+				data, _ = json.Marshal(wsMessage{Type: "error", Value: mediaErrorCategory(message.Value)})
+			} else if message.Type != "mse" {
+				continue
 			}
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
-		defer cancel()
-		body, status, e := a.bridge.request(ctx, "GET", "/api/hls/"+file+"?"+q.Encode(), nil)
-		if e != nil || status != 200 {
-			http.Error(w, "media unavailable", 502)
+		if client.WriteMessage(typ, data) != nil {
 			return
 		}
-		if file == "playlist.m3u8" {
-			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-			body = []byte(rewritePlaylist(string(body)))
-		} else if file == "init.mp4" {
-			w.Header().Set("Content-Type", "video/mp4")
-		} else if file == "segment.ts" {
-			w.Header().Set("Content-Type", "video/mp2t")
-		} else {
-			w.Header().Set("Content-Type", "video/iso.segment")
+	}
+}
+func (a *App) hlsPlaylistHandler(w http.ResponseWriter, r *http.Request) {
+	c, ok := a.mediaCamera(w, r)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	body, status, e := a.bridge.request(ctx, "GET", "/api/stream.m3u8?src="+url.QueryEscape(streamName(c, qualityOf(r)))+"&mp4=all", nil)
+	if e != nil || status != 200 || !strings.Contains(string(body), "#EXTM3U") {
+		fail(w, 502, "สร้างวิดีโอ HLS ไม่สำเร็จ")
+		return
+	}
+	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+	_, _ = w.Write([]byte(rewritePlaylist(string(body))))
+}
+func (a *App) hlsFileHandler(w http.ResponseWriter, r *http.Request) {
+	file := r.PathValue("file")
+	contentType := map[string]string{"playlist.m3u8": "application/vnd.apple.mpegurl", "init.mp4": "video/mp4", "segment.m4s": "video/iso.segment", "segment.ts": "video/mp2t"}[file]
+	if contentType == "" {
+		http.NotFound(w, r)
+		return
+	}
+	q := url.Values{}
+	for _, k := range []string{"id", "n"} {
+		if v := r.URL.Query().Get(k); v != "" && len(v) < 120 {
+			q.Set(k, v)
 		}
-		_, _ = w.Write(body)
-	}))
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	body, status, e := a.bridge.request(ctx, "GET", "/api/hls/"+file+"?"+q.Encode(), nil)
+	if e != nil || status != 200 {
+		http.Error(w, "media unavailable", 502)
+		return
+	}
+	if file == "playlist.m3u8" {
+		body = []byte(rewritePlaylist(string(body)))
+	}
+	w.Header().Set("Content-Type", contentType)
+	_, _ = w.Write(body)
 }
 func rewritePlaylist(body string) string {
 	body = strings.ReplaceAll(body, "hls/playlist.m3u8?", "/api/media/hls/playlist.m3u8?")
@@ -445,4 +475,3 @@ func rewritePlaylist(body string) string {
 	}
 	return body
 }
-func principalID(a *App, r *http.Request) string { p, _ := a.principal(r); return p.ID }

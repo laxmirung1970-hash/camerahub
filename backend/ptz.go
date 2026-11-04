@@ -25,7 +25,7 @@ func (a *App) ptzHandler(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "ไม่พบกล้อง")
 		return
 	}
-	owner := principalID(a, r)
+	owner := principalOf(r).ID
 	if b.Direction == "stop" {
 		if e = a.stopCamera(c.ID, owner); e != nil {
 			fail(w, 502, "ส่งคำสั่งหยุดไม่สำเร็จ กล้อง ONVIF มีเวลาหยุดสำรองในตัว 1 วินาที")
@@ -38,7 +38,7 @@ func (a *App) ptzHandler(w http.ResponseWriter, r *http.Request) {
 		fail(w, 409, "กล้องนี้ยังไม่รองรับหรือยังไม่เปิดใช้การหมุน")
 		return
 	}
-	if c.Status == "offline" || c.Status == "auth_expired" {
+	if cameraUnavailable(c) {
 		fail(w, 409, "กล้องยังไม่พร้อมเชื่อมต่อ")
 		return
 	}

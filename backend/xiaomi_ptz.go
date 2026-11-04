@@ -76,9 +76,10 @@ func (a *App) ptzProbeHandler(w http.ResponseWriter, r *http.Request) {
 		fail(w, 502, "ยังอ่านตำแหน่งมอเตอร์ไม่ได้ เปิดภาพสดก่อนแล้วลองตรวจอีกครั้ง รุ่นนี้อาจยังไม่รองรับคำสั่งเดียวกัน")
 		return
 	}
-	c.Source.PTZProtocol = "miss-step"
-	c.PTZ = true
-	if a.store.saveCamera(c) != nil {
+	if _, err = a.store.updateCamera(c.ID, func(c *Camera) {
+		c.Source.PTZProtocol = "miss-step"
+		c.PTZ = true
+	}); err != nil {
 		fail(w, 500, "บันทึกความสามารถไม่สำเร็จ")
 		return
 	}

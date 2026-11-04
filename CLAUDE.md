@@ -13,7 +13,7 @@ CameraHub: self-hosted viewer for the owner's real Tapo + Xiaomi cameras (web PW
 No Go toolchain on this machine; backend builds/tests run in Docker. Node is installed.
 
 ```powershell
-# Backend: go test -v ./... && go vet ./... inside golang:1.25-alpine
+# Backend: gofmt check, go vet, go test -race inside golang:1.25 (Debian image; race needs cgo)
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-Backend.ps1
 # Single Go test (same container, custom command)
 docker run --rm --mount "type=bind,source=${PWD}\backend,target=/src" --mount type=volume,source=camerahub-gomod,target=/go/pkg/mod --mount type=volume,source=camerahub-gocache,target=/root/.cache/go-build --workdir /src golang:1.25-alpine go test -run TestName -v ./...

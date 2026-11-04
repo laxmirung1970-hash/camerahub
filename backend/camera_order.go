@@ -26,15 +26,15 @@ func applyCameraOrder(cameras []Camera, raw string) {
 }
 
 func (a *App) cameraOrderHandler(w http.ResponseWriter, r *http.Request) {
-	// Discovery can insert new lens channels beside a camera at the same time.
-	a.syncMu.Lock()
-	defer a.syncMu.Unlock()
 	var body struct {
 		IDs []string `json:"ids"`
 	}
 	if !readJSON(w, r, &body) {
 		return
 	}
+	// Discovery can insert new lens channels beside a camera at the same time.
+	a.syncMu.Lock()
+	defer a.syncMu.Unlock()
 	cameras, err := a.store.cameras()
 	if err != nil {
 		fail(w, 500, "อ่านรายการกล้องไม่สำเร็จ")

@@ -1,13 +1,13 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"golang.org/x/crypto/argon2"
 	"io"
 	"net"
@@ -76,8 +76,9 @@ func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 }
 func (a *App) setupCode() string { return a.store.setting("setup_code") }
 func (a *App) initSetup(dir string) error {
-	if a.store.setting("owner_hash") != "" {
-		return nil
+	hash, err := a.store.lookupSetting("owner_hash")
+	if err != nil || hash != "" {
+		return err
 	}
 	code := a.setupCode()
 	if code == "" {
@@ -88,7 +89,10 @@ func (a *App) initSetup(dir string) error {
 	}
 	return os.WriteFile(filepath.Join(dir, a.mode+"-setup-code.txt"), []byte(code), 0600)
 }
-func (a *App) issueSession(w http.ResponseWriter, r *http.Request, name, kind string) (string, error) {
+
+// issueSession stores a hashed token. The cookie is skipped for TV tokens and
+// for allowlisted cross-origin logins, which keep the token themselves.
+func (a *App) issueSession(w http.ResponseWriter, r *http.Request, name, kind string, cookie bool) (string, error) {
 	tok := randomToken(32)
 	days := 14
 	if kind == "tv" {
@@ -98,17 +102,49 @@ func (a *App) issueSession(w http.ResponseWriter, r *http.Request, name, kind st
 	if err != nil {
 		return "", err
 	}
-	if kind != "tv" {
-		http.SetCookie(w, &http.Cookie{Name: "ch_session", Value: tok, Path: "/", HttpOnly: true, Secure: r.TLS != nil || env("APP_SECURE_COOKIES", "false") == "true", SameSite: http.SameSiteStrictMode, MaxAge: days * 86400})
+	if cookie {
+		http.SetCookie(w, &http.Cookie{Name: "ch_session", Value: tok, Path: "/", HttpOnly: true, Secure: r.TLS != nil || a.cfg.secureCookies, SameSite: http.SameSiteStrictMode, MaxAge: days * 86400})
 	}
 	return tok, nil
 }
-func (a *App) principal(r *http.Request) (Principal, bool) {
-	tok := ""
+func (a *App) finishLogin(w http.ResponseWriter, r *http.Request, name string, wantToken bool, status int) {
+	cross := a.crossOriginAllowed(r)
+	tok, err := a.issueSession(w, r, name, "owner", !cross)
+	if err != nil {
+		fail(w, 500, "สร้างเซสชันไม่สำเร็จ")
+		return
+	}
+	out := map[string]any{"ok": true}
+	if cross || wantToken {
+		out["token"] = tok
+	}
+	jsonOut(w, status, out)
+}
+
+// Browsers cannot set headers on a WebSocket handshake, so a cross-origin
+// client sends its token as the subprotocol after "bearer". Query strings
+// are never accepted because they end up in logs.
+func bearerToken(r *http.Request) string {
 	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
-		tok = strings.TrimPrefix(h, "Bearer ")
-	} else if cookie, err := r.Cookie("ch_session"); err == nil {
-		tok = cookie.Value
+		return strings.TrimPrefix(h, "Bearer ")
+	}
+	if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+		return ""
+	}
+	protocols := strings.Split(strings.Join(r.Header.Values("Sec-WebSocket-Protocol"), ","), ",")
+	for i, p := range protocols {
+		if strings.TrimSpace(p) == "bearer" && i+1 < len(protocols) {
+			return strings.TrimSpace(protocols[i+1])
+		}
+	}
+	return ""
+}
+func (a *App) principal(r *http.Request) (Principal, bool) {
+	tok := bearerToken(r)
+	if tok == "" {
+		if cookie, err := r.Cookie("ch_session"); err == nil {
+			tok = cookie.Value
+		}
 	}
 	if tok == "" {
 		return Principal{}, false
@@ -118,6 +154,13 @@ func (a *App) principal(r *http.Request) (Principal, bool) {
 	p.ID = tokenHash(tok)
 	err := a.store.DB.QueryRow("SELECT name,kind,expires FROM sessions WHERE hash=?", p.ID).Scan(&p.Name, &p.Kind, &expires)
 	return p, err == nil && expires > time.Now().Unix()
+}
+
+type principalKey struct{}
+
+func principalOf(r *http.Request) Principal {
+	p, _ := r.Context().Value(principalKey{}).(Principal)
+	return p
 }
 func (a *App) require(owner bool, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -130,22 +173,39 @@ func (a *App) require(owner bool, next http.HandlerFunc) http.HandlerFunc {
 			fail(w, 403, "ต้องใช้บัญชีเจ้าของระบบ")
 			return
 		}
-		next(w, r)
+		next(w, r.WithContext(context.WithValue(r.Context(), principalKey{}, p)))
 	}
 }
 func (a *App) security(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Referrer-Policy", "same-origin")
-		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' ws: wss:; font-src 'self'; worker-src 'self' blob:; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "same-origin")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		h.Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' ws: wss:; font-src 'self'; worker-src 'self' blob:; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
 		if strings.HasPrefix(r.URL.Path, "/api/") {
-			w.Header().Set("Cache-Control", "no-store")
+			h.Set("Cache-Control", "no-store")
+		}
+		origin := r.Header.Get("Origin")
+		allowed := origin != "" && a.crossOriginAllowed(r)
+		if allowed {
+			// Exact origin echo; never "*". Credentials stay off unless the
+			// origin is on the allowlist.
+			h.Set("Access-Control-Allow-Origin", origin)
+			h.Set("Access-Control-Allow-Credentials", "true")
+			h.Set("Access-Control-Expose-Headers", "Content-Disposition")
+			h.Add("Vary", "Origin")
+			if r.Method == "OPTIONS" {
+				h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+				h.Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+				h.Set("Access-Control-Max-Age", "600")
+				w.WriteHeader(204)
+				return
+			}
 		}
 		// Reject cross-site mutations, including form posts. Bearer clients are not ambient credentials.
-		if r.Method != "GET" && r.Method != "HEAD" && r.Method != "OPTIONS" {
-			origin := r.Header.Get("Origin")
+		if r.Method != "GET" && r.Method != "HEAD" && r.Method != "OPTIONS" && !allowed {
 			if origin != "" {
 				u, err := url.Parse(origin)
 				if err != nil || u.Host != r.Host {
@@ -161,48 +221,73 @@ func (a *App) security(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// clientIP trusts X-Forwarded-For only from the one configured proxy, and
+// only its rightmost entry, which that proxy wrote itself.
+func (a *App) clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	if a.cfg.trustedProxy == "" || host != a.cfg.trustedProxy {
+		return host
+	}
+	parts := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
+	if ip := strings.TrimSpace(parts[len(parts)-1]); net.ParseIP(ip) != nil {
+		return ip
+	}
+	return host
+}
 func (a *App) rateOK(r *http.Request, kind string, limit int) bool {
-	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
-	key := kind + ":" + ip
+	key := kind + ":" + a.clientIP(r)
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	now := time.Now()
+	if now.Sub(a.ratesPruned) > time.Minute {
+		for k, v := range a.rates {
+			if now.Sub(v.At) > 2*time.Minute {
+				delete(a.rates, k)
+			}
+		}
+		a.ratesPruned = now
+	}
 	b := a.rates[key]
 	if now.Sub(b.At) > time.Minute {
 		b = rateBucket{At: now}
 	}
 	b.Count++
 	a.rates[key] = b
-	if len(a.rates) > 2000 {
-		for k, v := range a.rates {
-			if now.Sub(v.At) > 2*time.Minute {
-				delete(a.rates, k)
-			}
-		}
-	}
 	return b.Count <= limit
 }
 func (a *App) authRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/bootstrap", func(w http.ResponseWriter, r *http.Request) {
 		p, ok := a.principal(r)
-		jsonOut(w, 200, map[string]any{"mode": a.mode, "needsSetup": a.store.setting("owner_hash") == "", "authenticated": ok, "name": p.Name, "kind": p.Kind, "version": "1.0.0", "webRTC": env("APP_WEBRTC", "false") == "true"})
+		jsonOut(w, 200, map[string]any{"mode": a.mode, "needsSetup": a.store.setting("owner_hash") == "", "authenticated": ok, "name": p.Name, "kind": p.Kind, "version": appVersion, "webRTC": a.cfg.webRTC})
 	})
 	m.HandleFunc("POST /api/setup", func(w http.ResponseWriter, r *http.Request) {
-		if !a.rateOK(r, "setup", 8) {
-			fail(w, 429, "ลองใหม่ในอีกหนึ่งนาที")
+		if !a.limit(w, r, "setup", 8, "ลองใหม่ในอีกหนึ่งนาที") {
 			return
 		}
-		var b struct{ Code, Name, Password string }
+		var b struct {
+			Code, Name, Password string
+			Token                bool
+		}
 		if !readJSON(w, r, &b) {
 			return
 		}
-		if utf8.RuneCountInString(b.Password) < 8 || len(b.Password) > 256 || len(strings.TrimSpace(b.Name)) < 2 || len(b.Name) > 80 {
+		name := strings.TrimSpace(b.Name)
+		if utf8.RuneCountInString(b.Password) < 8 || len(b.Password) > 256 || runes(name) < 2 || runes(name) > 80 {
 			fail(w, 400, "ระบุชื่อและรหัสผ่านอย่างน้อย 8 ตัวอักษร")
 			return
 		}
 		a.setupMu.Lock()
 		defer a.setupMu.Unlock()
-		if a.store.setting("owner_hash") != "" {
+		hash, err := a.store.lookupSetting("owner_hash")
+		if err != nil {
+			fail(w, 500, "อ่านการตั้งค่าไม่สำเร็จ")
+			return
+		}
+		if hash != "" {
 			fail(w, 409, "ตั้งค่าเจ้าของระบบแล้ว")
 			return
 		}
@@ -216,8 +301,8 @@ func (a *App) authRoutes(m *http.ServeMux) {
 			return
 		}
 		defer tx.Rollback()
-		for k, v := range map[string]string{"owner_hash": hashPassword(b.Password), "owner_name": strings.TrimSpace(b.Name), "setup_code": ""} {
-			if _, e = tx.Exec("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", k, v); e != nil {
+		for k, v := range map[string]string{"owner_hash": hashPassword(b.Password), "owner_name": name, "setup_code": ""} {
+			if upsertSetting(tx, k, v) != nil {
 				fail(w, 500, "บันทึกไม่สำเร็จ")
 				return
 			}
@@ -227,19 +312,17 @@ func (a *App) authRoutes(m *http.ServeMux) {
 			return
 		}
 		_ = os.Remove(filepath.Join(a.data, a.mode+"-setup-code.txt"))
-		if _, e = a.issueSession(w, r, b.Name, "owner"); e != nil {
-			fail(w, 500, "สร้างเซสชันไม่สำเร็จ")
-			return
-		}
 		a.store.event("setup", "ตั้งค่าเจ้าของระบบเรียบร้อย")
-		jsonOut(w, 201, map[string]bool{"ok": true})
+		a.finishLogin(w, r, name, b.Token, 201)
 	})
 	m.HandleFunc("POST /api/login", func(w http.ResponseWriter, r *http.Request) {
-		if !a.rateOK(r, "login", 8) {
-			fail(w, 429, "ลองเข้าสู่ระบบใหม่ในอีกหนึ่งนาที")
+		if !a.limit(w, r, "login", 8, "ลองเข้าสู่ระบบใหม่ในอีกหนึ่งนาที") {
 			return
 		}
-		var b struct{ Password string }
+		var b struct {
+			Password string
+			Token    bool
+		}
 		if !readJSON(w, r, &b) {
 			return
 		}
@@ -247,18 +330,17 @@ func (a *App) authRoutes(m *http.ServeMux) {
 			fail(w, 401, "รหัสผ่านไม่ถูกต้อง")
 			return
 		}
-		if _, err := a.issueSession(w, r, a.store.setting("owner_name"), "owner"); err != nil {
-			fail(w, 500, "เข้าใช้งานไม่สำเร็จ")
-			return
-		}
-		jsonOut(w, 200, map[string]bool{"ok": true})
+		a.finishLogin(w, r, a.store.setting("owner_name"), b.Token, 200)
 	})
 	m.HandleFunc("POST /api/logout", a.require(false, func(w http.ResponseWriter, r *http.Request) {
-		p, _ := a.principal(r)
-		_, _ = a.store.DB.Exec("DELETE FROM sessions WHERE hash=?", p.ID)
+		p := principalOf(r)
+		if _, err := a.store.DB.Exec("DELETE FROM sessions WHERE hash=?", p.ID); err != nil {
+			fail(w, 500, "ออกจากระบบไม่สำเร็จ")
+			return
+		}
 		a.stopPrincipal(p.ID)
 		http.SetCookie(w, &http.Cookie{Name: "ch_session", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
-		jsonOut(w, 200, map[string]bool{"ok": true})
+		ok(w)
 	}))
 	m.HandleFunc("GET /api/devices", a.require(true, func(w http.ResponseWriter, r *http.Request) {
 		rows, err := a.store.DB.Query("SELECT hash,name,expires FROM sessions WHERE kind='tv' AND expires>?", time.Now().Unix())
@@ -279,14 +361,11 @@ func (a *App) authRoutes(m *http.ServeMux) {
 	}))
 	m.HandleFunc("DELETE /api/devices/{id}", a.require(true, func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		_, _ = a.store.DB.Exec("DELETE FROM sessions WHERE hash=? AND kind='tv'", id)
+		if _, err := a.store.DB.Exec("DELETE FROM sessions WHERE hash=? AND kind='tv'", id); err != nil {
+			fail(w, 500, "ยกเลิกอุปกรณ์ไม่สำเร็จ")
+			return
+		}
 		a.stopPrincipal(id)
-		jsonOut(w, 200, map[string]bool{"ok": true})
+		ok(w)
 	}))
-}
-func safeError(prefix string, err error) error {
-	if err == nil {
-		return nil
-	}
-	return fmt.Errorf("%s: การเชื่อมต่อไม่สำเร็จ โปรดตรวจบัญชี ที่อยู่กล้อง และสถานะเครือข่าย", prefix)
 }

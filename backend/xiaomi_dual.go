@@ -79,6 +79,8 @@ func (s *Store) mergeDiscoveredCameras(incoming []Camera) (int, error) {
 	if len(incoming) == 0 {
 		return 0, nil
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	existing, err := s.cameras()
 	if err != nil {
 		return 0, err
@@ -111,48 +113,20 @@ func (s *Store) mergeDiscoveredCameras(incoming []Camera) (int, error) {
 			}
 		}
 	}
-	if len(newLenses) > 0 {
-		children := map[string]bool{}
-		for _, id := range newLenses {
-			children[id] = true
-		}
-		placed := make([]string, 0, len(order))
-		for _, id := range order {
-			if children[id] {
-				continue
-			}
-			placed = append(placed, id)
-			if child, ok := newLenses[id]; ok {
-				placed = append(placed, child)
-			}
-		}
-		order = placed
-	}
+	order = placeNewLenses(order, newLenses)
 	tx, err := s.DB.Begin()
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback()
 	for _, c := range updates {
-		payload, e := json.Marshal(c)
-		if e != nil {
-			return 0, e
-		}
-		raw, e := json.Marshal(c.Source)
-		if e != nil {
-			return 0, e
-		}
-		secret, e := seal(s.Key, raw)
-		if e != nil {
-			return 0, e
-		}
-		if _, e = tx.Exec("INSERT INTO cameras(id,payload,secret) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,secret=excluded.secret", c.ID, payload, secret); e != nil {
-			return 0, e
+		if err = s.upsertCamera(tx, c); err != nil {
+			return 0, err
 		}
 	}
 	if len(newLenses) > 0 {
 		raw, _ := json.Marshal(order)
-		if _, err = tx.Exec("INSERT INTO settings(key,value) VALUES('camera_order',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", string(raw)); err != nil {
+		if err = upsertSetting(tx, "camera_order", string(raw)); err != nil {
 			return 0, err
 		}
 	}
@@ -160,6 +134,29 @@ func (s *Store) mergeDiscoveredCameras(incoming []Camera) (int, error) {
 		return 0, err
 	}
 	return len(updates), nil
+}
+
+// placeNewLenses moves each newly discovered second lens directly after its
+// parent and leaves every other position untouched.
+func placeNewLenses(order []string, newLenses map[string]string) []string {
+	if len(newLenses) == 0 {
+		return order
+	}
+	children := map[string]bool{}
+	for _, id := range newLenses {
+		children[id] = true
+	}
+	placed := make([]string, 0, len(order))
+	for _, id := range order {
+		if children[id] {
+			continue
+		}
+		placed = append(placed, id)
+		if child, ok := newLenses[id]; ok {
+			placed = append(placed, child)
+		}
+	}
+	return placed
 }
 
 // Expand cameras already linked in this installation without cloud login,

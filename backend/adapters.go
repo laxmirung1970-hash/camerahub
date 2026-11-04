@@ -17,191 +17,255 @@ import (
 var regions = map[string]bool{"cn": true, "sg": true, "de": true, "us": true, "ru": true, "i2": true}
 var accountPattern = regexp.MustCompile(`^[0-9]{3,24}$`)
 
+// Xiaomi connections are keyed by numeric account; Tapo has no account ID, so
+// two Tapo camera accounts must not collapse into one record.
+func connectionID(vendor, account, username string) string {
+	if vendor == "tapo" {
+		return cameraID("connection", "tapo:"+strings.ToLower(strings.TrimSpace(username)))
+	}
+	return cameraID("connection", vendor+":"+account)
+}
 func (a *App) connectionRoutes(m *http.ServeMux) {
-	m.HandleFunc("GET /api/connections", a.require(true, func(w http.ResponseWriter, r *http.Request) {
-		cs, e := a.store.connections()
-		if e != nil {
-			fail(w, 500, "อ่านการเชื่อมต่อไม่สำเร็จ")
-			return
-		}
-		jsonOut(w, 200, cs)
-	}))
-	m.HandleFunc("POST /api/connections", a.require(true, func(w http.ResponseWriter, r *http.Request) {
-		if a.mode != "live" {
-			fail(w, 409, "โหมดสาธิตไม่รับบัญชีหรือเชื่อมกล้องจริง")
-			return
-		}
-		var b struct {
-			ID, Vendor, Name, Account, Region, Username, Password string
-			Enabled                                               bool
-		}
-		if !readJSON(w, r, &b) {
-			return
-		}
-		if b.Vendor != "tapo" && b.Vendor != "xiaomi" {
-			fail(w, 400, "เลือก Tapo หรือ Xiaomi")
-			return
-		}
-		if len(b.Name) > 120 || len(b.Username) > 160 || len(b.Password) > 256 {
-			fail(w, 400, "ข้อมูลยาวเกินไป")
-			return
-		}
-		if b.Vendor == "xiaomi" && (!regions[b.Region] || !accountPattern.MatchString(b.Account)) {
-			fail(w, 400, "เลือก Region และรหัสบัญชี Xiaomi แบบตัวเลข")
-			return
-		}
-		c := Connection{ID: cameraID("connection", b.Vendor+":"+b.Account), Vendor: b.Vendor, Name: b.Name, Account: b.Account, Region: b.Region, Enabled: b.Enabled, Username: b.Username, Password: b.Password, Status: "pending"}
-		if b.ID != "" {
-			old, _ := a.store.connections()
-			found := false
-			for _, o := range old {
-				if o.ID == b.ID && o.Vendor == b.Vendor {
-					c.ID = o.ID
-					c.LastSync = o.LastSync
-					found = true
-					if b.Password == "" {
-						c.Password = o.Password
-						c.Username = o.Username
-					}
-					break
-				}
-			}
-			if !found {
-				fail(w, 404, "ไม่พบการเชื่อมต่อ")
-				return
-			}
-		}
-		if c.Name == "" {
-			c.Name = strings.ToUpper(b.Vendor)
-		}
-		if c.Vendor == "tapo" && (c.Username == "" || c.Password == "") {
-			fail(w, 400, "ระบุ Camera Account จากแอป Tapo")
-			return
-		}
-		if e := a.store.saveConnection(c); e != nil {
-			fail(w, 500, "บันทึกไม่สำเร็จ")
-			return
-		}
-		a.store.event("connection", "บันทึกการเชื่อมต่อ "+c.Vendor)
-		jsonOut(w, 201, c)
-	}))
-	m.HandleFunc("POST /api/connections/{id}/toggle", a.require(true, func(w http.ResponseWriter, r *http.Request) {
-		var b struct{ Enabled bool }
-		if !readJSON(w, r, &b) {
-			return
-		}
-		cs, e := a.store.connections()
-		if e != nil {
+	m.HandleFunc("GET /api/connections", a.require(true, a.listConnections))
+	m.HandleFunc("POST /api/connections", a.require(true, a.liveOnly("โหมดสาธิตไม่รับบัญชีหรือเชื่อมกล้องจริง", a.saveConnectionHandler)))
+	m.HandleFunc("POST /api/connections/{id}/toggle", a.require(true, a.toggleConnection))
+	m.HandleFunc("POST /api/discover", a.require(true, a.discoverHandler))
+	m.HandleFunc("POST /api/cameras/tapo", a.require(true, a.liveOnly("โหมดสาธิตไม่เชื่อมกล้องจริง", a.addTapoCamera)))
+	m.HandleFunc("GET /api/xiaomi/accounts", a.require(true, a.xiaomiAccounts))
+	m.HandleFunc("POST /api/xiaomi/auth", a.require(true, a.liveOnly("โหมดสาธิตไม่รับรหัสผ่าน Xiaomi", a.xiaomiAuth)))
+}
+func (a *App) listConnections(w http.ResponseWriter, r *http.Request) {
+	cs, e := a.store.connections()
+	if e != nil {
+		fail(w, 500, "อ่านการเชื่อมต่อไม่สำเร็จ")
+		return
+	}
+	jsonOut(w, 200, cs)
+}
+func (a *App) saveConnectionHandler(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		ID, Vendor, Name, Account, Region, Username, Password string
+		Enabled                                               bool
+	}
+	if !readJSON(w, r, &b) {
+		return
+	}
+	if b.Vendor != "tapo" && b.Vendor != "xiaomi" {
+		fail(w, 400, "เลือก Tapo หรือ Xiaomi")
+		return
+	}
+	if runes(b.Name) > 120 || len(b.Username) > 160 || len(b.Password) > 256 {
+		fail(w, 400, "ข้อมูลยาวเกินไป")
+		return
+	}
+	if b.Vendor == "xiaomi" && (!regions[b.Region] || !accountPattern.MatchString(b.Account)) {
+		fail(w, 400, "เลือก Region และรหัสบัญชี Xiaomi แบบตัวเลข")
+		return
+	}
+	c := Connection{ID: connectionID(b.Vendor, b.Account, b.Username), Vendor: b.Vendor, Name: strings.TrimSpace(b.Name), Account: b.Account, Region: b.Region, Enabled: b.Enabled, Username: b.Username, Password: b.Password, Status: "pending"}
+	if b.ID != "" {
+		old, err := a.store.connections()
+		if err != nil {
 			fail(w, 500, "อ่านข้อมูลไม่สำเร็จ")
 			return
 		}
-		for _, c := range cs {
-			if c.ID == r.PathValue("id") {
-				c.Enabled = b.Enabled
-				if e = a.store.saveConnection(c); e != nil {
-					fail(w, 500, "บันทึกไม่สำเร็จ")
-					return
+		found := false
+		for _, o := range old {
+			if o.ID == b.ID && o.Vendor == b.Vendor {
+				c.ID = o.ID
+				c.LastSync = o.LastSync
+				found = true
+				if b.Password == "" {
+					c.Password = o.Password
+					c.Username = o.Username
 				}
-				jsonOut(w, 200, c)
+				break
+			}
+		}
+		if !found {
+			fail(w, 404, "ไม่พบการเชื่อมต่อ")
+			return
+		}
+	}
+	if c.Name == "" {
+		c.Name = strings.ToUpper(b.Vendor)
+	}
+	if c.Vendor == "tapo" && (c.Username == "" || c.Password == "") {
+		fail(w, 400, "ระบุ Camera Account จากแอป Tapo")
+		return
+	}
+	if e := a.store.saveConnection(c); e != nil {
+		fail(w, 500, "บันทึกไม่สำเร็จ")
+		return
+	}
+	a.store.event("connection", "บันทึกการเชื่อมต่อ "+c.Vendor)
+	jsonOut(w, 201, c)
+}
+func (a *App) toggleConnection(w http.ResponseWriter, r *http.Request) {
+	var b struct{ Enabled bool }
+	if !readJSON(w, r, &b) {
+		return
+	}
+	cs, e := a.store.connections()
+	if e != nil {
+		fail(w, 500, "อ่านข้อมูลไม่สำเร็จ")
+		return
+	}
+	for _, c := range cs {
+		if c.ID == r.PathValue("id") {
+			c.Enabled = b.Enabled
+			if e = a.store.saveConnection(c); e != nil {
+				fail(w, 500, "บันทึกไม่สำเร็จ")
+				return
+			}
+			jsonOut(w, 200, c)
+			return
+		}
+	}
+	fail(w, 404, "ไม่พบการเชื่อมต่อ")
+}
+func (a *App) discoverHandler(w http.ResponseWriter, r *http.Request) {
+	vendor := r.URL.Query().Get("vendor")
+	if vendor != "" && vendor != "xiaomi" && vendor != "tapo" {
+		fail(w, 400, "ระบบกล้องที่เลือกไม่ถูกต้อง")
+		return
+	}
+	if a.mode == "demo" {
+		cs, _ := a.store.cameras()
+		a.store.event("demo", "ซิงก์กล้องจำลองแล้ว ไม่ได้ค้นหาเครือข่ายจริง")
+		jsonOut(w, 200, map[string]any{"found": len(cs), "simulated": true, "message": "อัปเดตรายการสาธิตแล้ว ไม่มีการค้นหาเครือข่ายจริง"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	count, e := a.syncConnections(ctx, vendor)
+	if e != nil {
+		fail(w, 502, e.Error())
+		return
+	}
+	jsonOut(w, 200, map[string]any{"found": count, "message": fmt.Sprintf("ค้นหาเสร็จแล้ว พบ %d รายการ กล้องที่พบใหม่ยังต้องตรวจภาพ เสียง และการหมุน", count)})
+}
+func (a *App) addTapoCamera(w http.ResponseWriter, r *http.Request) {
+	var b struct{ Host, Username, Password, Name string }
+	if !readJSON(w, r, &b) {
+		return
+	}
+	if e := validateCameraHost(b.Host); e != nil {
+		fail(w, 400, e.Error())
+		return
+	}
+	if len(b.Username) > 160 || len(b.Password) > 256 || runes(b.Name) > 180 {
+		fail(w, 400, "ข้อมูลยาวเกินไป")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
+	c, e := (&ONVIF{}).inspect(ctx, b.Host, b.Username, b.Password)
+	if e != nil {
+		var response *onvifResponseError
+		if errors.As(e, &response) && response.Auth {
+			source := (&url.URL{Scheme: "rtsp", Host: net.JoinHostPort(b.Host, "554"), Path: "/stream1", User: url.UserPassword(b.Username, b.Password)}).String()
+			check, stopCheck := context.WithTimeout(ctx, 10*time.Second)
+			result := a.bridge.checkRTSP(check, source)
+			stopCheck()
+			if result == "accepted" {
+				fail(w, 502, "บัญชีผ่านการเชื่อม RTSP แล้ว แต่ ONVIF ยังปฏิเสธ จึงยังไม่เพิ่มกล้อง ต้องตรวจความเข้ากันได้ของ ONVIF ต่อ")
+				return
+			}
+			if result == "rejected" {
+				fail(w, 502, "ทั้ง RTSP และ ONVIF ปฏิเสธชื่อผู้ใช้/รหัสผ่านคู่นี้ ตรวจ Username ที่แสดงหลัง Verify ใน Tapo และกรอกรหัส Camera Account อีกครั้ง")
 				return
 			}
 		}
-		fail(w, 404, "ไม่พบการเชื่อมต่อ")
-	}))
-	m.HandleFunc("POST /api/discover", a.require(true, func(w http.ResponseWriter, r *http.Request) {
-		vendor := r.URL.Query().Get("vendor")
-		if vendor != "" && vendor != "xiaomi" && vendor != "tapo" {
-			fail(w, 400, "ระบบกล้องที่เลือกไม่ถูกต้อง")
-			return
-		}
-		if a.mode == "demo" {
-			cs, _ := a.store.cameras()
-			a.store.event("demo", "ซิงก์กล้องจำลองแล้ว ไม่ได้ค้นหาเครือข่ายจริง")
-			jsonOut(w, 200, map[string]any{"found": len(cs), "simulated": true, "message": "อัปเดตรายการสาธิตแล้ว ไม่มีการค้นหาเครือข่ายจริง"})
-			return
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
-		defer cancel()
-		count, e := a.syncConnections(ctx, vendor)
-		if e != nil {
-			fail(w, 502, e.Error())
-			return
-		}
-		jsonOut(w, 200, map[string]any{"found": count, "message": fmt.Sprintf("ค้นหาเสร็จแล้ว พบ %d รายการ กล้องที่พบใหม่ยังต้องตรวจภาพ เสียง และการหมุน", count)})
-	}))
-	m.HandleFunc("POST /api/cameras/tapo", a.require(true, func(w http.ResponseWriter, r *http.Request) {
-		if a.mode != "live" {
-			fail(w, 409, "โหมดสาธิตไม่เชื่อมกล้องจริง")
-			return
-		}
-		var b struct{ Host, Username, Password, Name string }
-		if !readJSON(w, r, &b) {
-			return
-		}
-		if e := validateCameraHost(b.Host); e != nil {
-			fail(w, 400, e.Error())
-			return
-		}
-		if len(b.Username) > 160 || len(b.Password) > 256 || len(b.Name) > 180 {
-			fail(w, 400, "ข้อมูลยาวเกินไป")
-			return
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
-		defer cancel()
-		c, e := (&ONVIF{}).inspect(ctx, b.Host, b.Username, b.Password)
-		if e != nil {
-			var response *onvifResponseError
-			if errors.As(e, &response) && response.Auth {
-				source := (&url.URL{Scheme: "rtsp", Host: net.JoinHostPort(b.Host, "554"), Path: "/stream1", User: url.UserPassword(b.Username, b.Password)}).String()
-				check, stopCheck := context.WithTimeout(ctx, 10*time.Second)
-				result := a.bridge.checkRTSP(check, source)
-				stopCheck()
-				if result == "accepted" {
-					fail(w, 502, "บัญชีผ่านการเชื่อม RTSP แล้ว แต่ ONVIF ยังปฏิเสธ จึงยังไม่เพิ่มกล้อง ต้องตรวจความเข้ากันได้ของ ONVIF ต่อ")
-					return
-				}
-				if result == "rejected" {
-					fail(w, 502, "ทั้ง RTSP และ ONVIF ปฏิเสธชื่อผู้ใช้/รหัสผ่านคู่นี้ ตรวจ Username ที่แสดงหลัง Verify ใน Tapo และกรอกรหัส Camera Account อีกครั้ง")
-					return
-				}
-			}
-			fail(w, 502, onvifSetupMessage(e))
-			return
-		}
-		if b.Name != "" {
-			c.Name = b.Name
-		}
-		if a.store.mergeCamera(c) != nil {
-			fail(w, 500, "บันทึกกล้องไม่สำเร็จ")
-			return
-		}
-		jsonOut(w, 201, c)
-	}))
-	m.HandleFunc("GET /api/xiaomi/accounts", a.require(true, func(w http.ResponseWriter, r *http.Request) {
-		if a.mode != "live" {
-			jsonOut(w, 200, []string{})
-			return
-		}
-		raw, status, e := a.bridge.request(r.Context(), "GET", "/api/xiaomi", nil)
-		if e != nil || status != 200 {
-			fail(w, 502, "ตัวกลาง Xiaomi ยังไม่พร้อม")
-			return
-		}
-		var ids []string
-		if json.Unmarshal(raw, &ids) != nil {
-			fail(w, 502, "อ่านบัญชีไม่ได้")
-			return
-		}
-		jsonOut(w, 200, ids)
-	}))
-	m.HandleFunc("POST /api/xiaomi/auth", a.require(true, a.xiaomiAuth))
-}
-func (a *App) xiaomiAuth(w http.ResponseWriter, r *http.Request) {
-	if a.mode != "live" {
-		fail(w, 409, "โหมดสาธิตไม่รับรหัสผ่าน Xiaomi")
+		fail(w, 502, onvifSetupMessage(e))
 		return
 	}
-	var b struct{ Username, Password, Captcha, Verify string }
+	if name := strings.TrimSpace(b.Name); name != "" {
+		c.Name = name
+	}
+	if a.store.mergeCamera(c) != nil {
+		fail(w, 500, "บันทึกกล้องไม่สำเร็จ")
+		return
+	}
+	jsonOut(w, 201, c)
+}
+func (a *App) xiaomiAccounts(w http.ResponseWriter, r *http.Request) {
+	if a.mode != "live" {
+		jsonOut(w, 200, []string{})
+		return
+	}
+	ids, e := a.xiaomiAccountIDs(r.Context())
+	if e != nil {
+		fail(w, 502, e.Error())
+		return
+	}
+	jsonOut(w, 200, ids)
+}
+func (a *App) xiaomiAccountIDs(ctx context.Context) ([]string, error) {
+	raw, status, e := a.bridge.request(ctx, "GET", "/api/xiaomi", nil)
+	if e != nil || status != 200 {
+		return nil, errors.New("ตัวกลาง Xiaomi ยังไม่พร้อม")
+	}
+	var ids []string
+	if json.Unmarshal(raw, &ids) != nil {
+		return nil, errors.New("อ่านบัญชีไม่ได้")
+	}
+	return ids, nil
+}
+
+type xiaomiAuthBody struct{ Username, Password, Captcha, Verify string }
+
+// Challenge replies must arrive in the phase the gateway is waiting for.
+func (a *App) xiaomiAuthForm(b xiaomiAuthBody) (url.Values, error) {
+	form := url.Values{}
+	expired := time.Now().After(a.authDeadline)
+	switch {
+	case b.Username != "" && b.Password != "":
+		form.Set("username", b.Username)
+		form.Set("password", b.Password)
+		a.authPhase = "login"
+	case b.Captcha != "":
+		if a.authPhase != "captcha" || expired {
+			return nil, errors.New("เริ่มเข้าสู่ระบบ Xiaomi ใหม่ก่อน")
+		}
+		form.Set("captcha", b.Captcha)
+	case b.Verify != "":
+		if a.authPhase != "verify" || expired {
+			return nil, errors.New("เริ่มเข้าสู่ระบบ Xiaomi ใหม่ก่อน")
+		}
+		form.Set("verify", b.Verify)
+	default:
+		return nil, errors.New("")
+	}
+	return form, nil
+}
+
+// xiaomiChallenge answers a 401 with the next step; false means no challenge was found.
+func (a *App) xiaomiChallenge(w http.ResponseWriter, raw []byte) bool {
+	var challenge struct {
+		Captcha string `json:"captcha"`
+		Phone   string `json:"verify_phone"`
+		Email   string `json:"verify_email"`
+	}
+	if json.Unmarshal(raw, &challenge) != nil {
+		fail(w, 502, "อ่านขั้นตอนยืนยันไม่สำเร็จ")
+		return true
+	}
+	a.authDeadline = time.Now().Add(10 * time.Minute)
+	if challenge.Captcha != "" {
+		a.authPhase = "captcha"
+		jsonOut(w, 200, map[string]string{"step": "captcha", "captcha": challenge.Captcha})
+		return true
+	}
+	if challenge.Phone != "" || challenge.Email != "" {
+		a.authPhase = "verify"
+		jsonOut(w, 200, map[string]string{"step": "verify", "destination": challenge.Phone + challenge.Email})
+		return true
+	}
+	return false
+}
+func (a *App) xiaomiAuth(w http.ResponseWriter, r *http.Request) {
+	var b xiaomiAuthBody
 	if !readJSON(w, r, &b) {
 		return
 	}
@@ -211,26 +275,13 @@ func (a *App) xiaomiAuth(w http.ResponseWriter, r *http.Request) {
 	}
 	a.xiaomiMu.Lock()
 	defer a.xiaomiMu.Unlock()
-	form := url.Values{}
-	switch {
-	case b.Username != "" && b.Password != "":
-		form.Set("username", b.Username)
-		form.Set("password", b.Password)
-		a.authPhase = "login"
-	case b.Captcha != "":
-		if a.authPhase != "captcha" || time.Now().After(a.authDeadline) {
-			fail(w, 409, "เริ่มเข้าสู่ระบบ Xiaomi ใหม่ก่อน")
-			return
+	form, err := a.xiaomiAuthForm(b)
+	if err != nil {
+		if err.Error() == "" {
+			fail(w, 400, "ระบุบัญชีและรหัสผ่าน หรือรหัสยืนยัน")
+		} else {
+			fail(w, 409, err.Error())
 		}
-		form.Set("captcha", b.Captcha)
-	case b.Verify != "":
-		if a.authPhase != "verify" || time.Now().After(a.authDeadline) {
-			fail(w, 409, "เริ่มเข้าสู่ระบบ Xiaomi ใหม่ก่อน")
-			return
-		}
-		form.Set("verify", b.Verify)
-	default:
-		fail(w, 400, "ระบุบัญชีและรหัสผ่าน หรือรหัสยืนยัน")
 		return
 	}
 	raw, status, e := a.bridge.request(r.Context(), "POST", "/api/xiaomi", strings.NewReader(form.Encode()))
@@ -241,27 +292,8 @@ func (a *App) xiaomiAuth(w http.ResponseWriter, r *http.Request) {
 		fail(w, 502, message)
 		return
 	}
-	if status == 401 {
-		var challenge struct {
-			Captcha string `json:"captcha"`
-			Phone   string `json:"verify_phone"`
-			Email   string `json:"verify_email"`
-		}
-		if json.Unmarshal(raw, &challenge) != nil {
-			fail(w, 502, "อ่านขั้นตอนยืนยันไม่สำเร็จ")
-			return
-		}
-		a.authDeadline = time.Now().Add(10 * time.Minute)
-		if challenge.Captcha != "" {
-			a.authPhase = "captcha"
-			jsonOut(w, 200, map[string]string{"step": "captcha", "captcha": challenge.Captcha})
-			return
-		}
-		if challenge.Phone != "" || challenge.Email != "" {
-			a.authPhase = "verify"
-			jsonOut(w, 200, map[string]string{"step": "verify", "destination": challenge.Phone + challenge.Email})
-			return
-		}
+	if status == 401 && a.xiaomiChallenge(w, raw) {
+		return
 	}
 	if status >= 300 {
 		a.authPhase = ""
@@ -271,9 +303,8 @@ func (a *App) xiaomiAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.authPhase = ""
-	raw, status, e = a.bridge.request(r.Context(), "GET", "/api/xiaomi", nil)
-	var ids []string
-	if e != nil || status != 200 || json.Unmarshal(raw, &ids) != nil {
+	ids, e := a.xiaomiAccountIDs(r.Context())
+	if e != nil {
 		fail(w, 502, "เข้าสู่ระบบแล้ว แต่อ่านหมายเลขบัญชีไม่สำเร็จ")
 		return
 	}
@@ -335,26 +366,30 @@ func (a *App) syncConnections(ctx context.Context, vendor string) (int, error) {
 			cs, err = a.discoverTapo(ctx, conn)
 		}
 		conn.LastSync = time.Now()
-		if err != nil {
-			failed = true
-			conn.Status = "error"
-			conn.Message = "ซิงก์ไม่ได้ ตรวจบัญชี Region และเครือข่าย"
-			_ = a.store.saveConnection(conn)
-			continue
-		}
 		conn.Status = "ready"
 		conn.Message = fmt.Sprintf("พบ %d ช่องภาพ รายการเดิมยังคงอยู่", len(cs))
-		for i := range cs {
-			cs[i].Source.Connection = conn.ID
-		}
-		merged, mergeErr := a.store.mergeDiscoveredCameras(cs)
-		if mergeErr != nil {
-			failed = true
+		if err != nil {
 			conn.Status = "error"
-			conn.Message = "บันทึกรายการช่องภาพไม่สำเร็จ ลองซิงก์ใหม่"
+			conn.Message = "ซิงก์ไม่ได้ ตรวจบัญชี Region และเครือข่าย"
+		} else {
+			for i := range cs {
+				cs[i].Source.Connection = conn.ID
+			}
+			merged, mergeErr := a.store.mergeDiscoveredCameras(cs)
+			if mergeErr != nil {
+				err = mergeErr
+				conn.Status = "error"
+				conn.Message = "บันทึกรายการช่องภาพไม่สำเร็จ ลองซิงก์ใหม่"
+			}
+			count += merged
 		}
-		count += merged
-		_ = a.store.saveConnection(conn)
+		if saveErr := a.store.saveConnection(conn); saveErr != nil {
+			err = saveErr
+			a.store.event("sync", "บันทึกสถานะการเชื่อมต่อไม่สำเร็จ")
+		}
+		if err != nil {
+			failed = true
+		}
 	}
 	if enabled == 0 {
 		return 0, errors.New("ยังไม่มีการเชื่อมต่อที่เปิดใช้ เพิ่มบัญชีในหน้าตั้งค่าก่อน")
