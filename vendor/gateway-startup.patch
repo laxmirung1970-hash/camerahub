@@ -1,0 +1,26 @@
+--- a/main.go
++++ b/main.go
+@@ -113,11 +113,14 @@
+ 		{"srtp", srtp.Init},
+ 	}
+ 
++	app.Info["startup"] = app.Startup
+ 	for _, m := range modules {
+ 		if app.Modules == nil || m.name == "" || slices.Contains(app.Modules, m.name) {
++			app.Startup.Set("starting:" + m.name)
+ 			m.init()
+ 		}
+ 	}
+ 
++	app.Startup.Set("ready")
+ 	shell.RunUntilSignal()
+ }
+--- /dev/null
++++ b/internal/app/startup.go
+@@ -0,0 +1,6 @@
++package app
++import ("encoding/json";"sync/atomic")
++type startupState struct { stage atomic.Value }
++var Startup = &startupState{}
++func(s *startupState) Set(stage string) { s.stage.Store(stage) }
++func(s *startupState) MarshalJSON()([]byte,error) { value,_:=s.stage.Load().(string);return json.Marshal(value) }

@@ -1,0 +1,12 @@
+<resources>
+    <style name="CameraHubTvTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">@font/ibm_plex_sans_thai_regular</item>
+        <item name="android:colorAccent">#F7A97E</item>
+        <item name="android:windowBackground">#111216</item>
+        <item name="android:colorBackground">#1F2127</item>
+        <item name="android:textColorPrimary">#FAF4EB</item>
+        <item name="android:textColorSecondary">#BBBCC7</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

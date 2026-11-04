@@ -1,0 +1,30 @@
+name: camerahub-windows-live
+services:
+  app:
+    image: camerahub/app:1.0.0-amd64
+    ports: ["127.0.0.1:17801:8080"]
+    environment:
+      APP_MODE: live
+      GO2RTC_URL: http://gateway:1984
+      GATEWAY_CONFIG: /gateway-state/go2rtc.yaml
+      APP_SECURE_COOKIES: "false"
+      APP_WEBRTC: "false"
+    volumes: ["live-data:/data", "live-gateway:/gateway-state"]
+    depends_on: [gateway]
+    restart: unless-stopped
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+    security_opt: ["no-new-privileges:true"]
+  gateway:
+    image: camerahub/gateway:1.9.14-control-amd64
+    volumes: ["live-gateway:/config"]
+    restart: unless-stopped
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+    security_opt: ["no-new-privileges:true"]
+volumes:
+  live-data:
+  live-gateway:
+# Windows-only local entry point. No camera discovery until the owner enables it.
+# Docker Desktop multicast discovery may fail; add each Tapo using its private IP.
+# For phone/TV access, use the NAS HTTPS deployment in deploy/compose.nas.yaml.

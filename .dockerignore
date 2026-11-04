@@ -1,0 +1,14 @@
+**/node_modules
+**/dist
+.git
+.cache
+runtime
+data
+releases
+android-tv
+test-results
+*.log
+private
+.github
+.githooks
+.vercel

@@ -1,0 +1,7 @@
+* text=auto eol=lf
+*.cmd text eol=crlf
+vendor/*.patch -text
+*.png binary
+*.mp4 binary
+*.ttf binary
+*.apk binary

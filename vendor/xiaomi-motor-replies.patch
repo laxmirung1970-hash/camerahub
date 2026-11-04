@@ -1,0 +1,119 @@
+--- a/pkg/xiaomi/miss/client.go
++++ b/pkg/xiaomi/miss/client.go
+@@ -74,7 +74,7 @@
+ 		return nil, err
+ 	}
+ 
+-	client := &Client{Conn: conn, key: key, model: model, replies: make(chan []byte, 10)}
++	client := &Client{Conn: conn, key: key, model: model, replies: make(chan []byte, 10), commandReplies: make(chan commandReply, 10)}
+ 	go client.readReplies()
+ 	return client, nil
+ }
+@@ -89,6 +89,7 @@
+ 	model string
+ 
+ 	replies     chan []byte
++	commandReplies chan commandReply
+ 	sendMu      sync.Mutex
+ 	listeners   map[chan []byte]struct{}
+ 	listenersMu sync.Mutex
+@@ -102,8 +103,8 @@
+ 	defer c.sendMu.Unlock()
+ 
+ 	// Drop replies to previous commands that arrived after their timeout
+-	for len(c.replies) > 0 {
+-		<-c.replies
++	for len(c.commandReplies) > 0 {
++		<-c.commandReplies
+ 	}
+ 
+ 	data := binary.BigEndian.AppendUint32(nil, cmd)
+@@ -112,12 +113,17 @@
+ 		return nil, err
+ 	}
+ 
+-	select {
+-	case reply := <-c.replies:
+-		return reply, nil
+-	case <-time.After(wait):
+-		return nil, nil
+-	}
++ timer := time.NewTimer(wait)
++ defer timer.Stop()
++ for {
++  select {
++  case reply := <-c.commandReplies:
++   if reply.cmd == cmd+1 { return reply.data, nil }
++  case <-timer.C:
++   return nil, errors.New("xiaomi: command response timeout")
++  }
++ }
++
+ }
+ 
+ // Replies exposes the messages read from the command channel.
+@@ -150,11 +156,13 @@
+ 		if err != nil {
+ 			return
+ 		}
+-		if (cmd == cmdEncoded || bits.ReverseBytes32(cmd) == cmdEncoded) && len(data) > 8 {
+-			if decoded, err := crypto.Decode(data, c.key); err == nil {
+-				data = decoded
+-			}
+-		}
++  cmd, data, err = normalizeCommandReply(cmd, data, c.key)
++  if err != nil { continue }
++  select {
++  case c.commandReplies <- commandReply{cmd:cmd, data:append([]byte(nil),data...)}:
++  default:
++  }
++
+ 		if Log != nil {
+ 			Log(cmd, data)
+ 		}
+@@ -413,3 +421,20 @@
+ //func dafangStop() []byte {
+ //	return dafangRaw(0xff2404, 0, 0, 5)
+ //}
++
++type commandReply struct { cmd uint32; data []byte }
++
++// CS2 frames carry network-order command IDs. Encrypted replies include a
++// four-byte inner ID and camera JSON may end in NUL bytes.
++func normalizeCommandReply(cmd uint32, data, key []byte) (uint32, []byte, error) {
++ if cmd == cmdEncoded || bits.ReverseBytes32(cmd) == cmdEncoded {
++  if len(data)<8 { return 0,nil,errors.New("xiaomi: truncated encrypted reply") }
++  decoded,err:=crypto.Decode(data,key)
++  if err!=nil { return 0,nil,err }
++  if len(decoded)<4 { return 0,nil,errors.New("xiaomi: truncated command reply") }
++  cmd=binary.BigEndian.Uint32(decoded[:4]); data=decoded[4:]
++ } else if cmd>0xffff && bits.ReverseBytes32(cmd)<=0xffff {
++  cmd=bits.ReverseBytes32(cmd)
++ }
++ return cmd, bytes.TrimRight(data,"\x00"),nil
++}
+--- /dev/null
++++ b/pkg/xiaomi/miss/camerahub_motor_test.go
+@@ -0,0 +1,22 @@
++package miss
++import (
++ "bytes"
++ "encoding/binary"
++ "math/bits"
++ "testing"
++ "github.com/AlexxIT/go2rtc/pkg/xiaomi/crypto"
++)
++func TestCameraHubMotorReplyFraming(t *testing.T) {
++ key:=bytes.Repeat([]byte{0x42},32)
++ expected:=[]byte(`{"angle":49,"elevation":51,"ret":0}`)
++ plain:=binary.BigEndian.AppendUint32(nil,0x113)
++ plain=append(plain,expected...); plain=append(plain,0)
++ encrypted,err:=crypto.Encode(plain,key); if err!=nil {t.Fatal(err)}
++ for _,outer:=range []uint32{cmdEncoded,bits.ReverseBytes32(cmdEncoded)} {
++  cmd,payload,err:=normalizeCommandReply(outer,encrypted,key)
++  if err!=nil||cmd!=0x113||!bytes.Equal(payload,expected) {t.Fatal("encrypted motor framing failed")}
++ }
++ cmd,payload,err:=normalizeCommandReply(bits.ReverseBytes32(0x113),append(expected,0),key)
++ if err!=nil||cmd!=0x113||!bytes.Equal(payload,expected) {t.Fatal("plain motor framing failed")}
++ if _,_,err=normalizeCommandReply(cmdEncoded,[]byte{1,2},key);err==nil {t.Fatal("accepted malformed encrypted reply")}
++}

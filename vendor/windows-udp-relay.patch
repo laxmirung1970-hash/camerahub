@@ -1,0 +1,133 @@
+--- a/pkg/xiaomi/miss/cs2/conn.go
++++ b/pkg/xiaomi/miss/cs2/conn.go
+@@ -7,6 +7,7 @@
+ 	"fmt"
+ 	"io"
+ 	"net"
++ "os"
+ 	"sync"
+ 	"sync/atomic"
+ 	"time"
+@@ -311,7 +312,13 @@
+ 
+ func newUDPConn(host string, port int) (net.Conn, error) {
+ 	// We using raw net.UDPConn, because RemoteAddr should be changed during handshake.
+-	conn, err := net.ListenUDP("udp", nil)
++	var conn udpSocket
++ var err error
++ if os.Getenv("CAMERAHUB_UDP_RELAY") != "" {
++   conn, err = dialRelayUDP(host)
++ } else {
++   conn, err = net.ListenUDP("udp", nil)
++ }
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -321,18 +328,18 @@
+ 		addr = &net.UDPAddr{IP: net.ParseIP(host), Port: port}
+ 	}
+ 
+-	return &udpConn{UDPConn: conn, addr: addr}, nil
++	return &udpConn{udpSocket: conn, addr: addr}, nil
+ }
+ 
+ type udpConn struct {
+-	*net.UDPConn
++	udpSocket
+ 	addr *net.UDPAddr
+ }
+ 
+ func (c *udpConn) Read(b []byte) (n int, err error) {
+ 	var addr *net.UDPAddr
+ 	for {
+-		n, addr, err = c.UDPConn.ReadFromUDP(b)
++		n, addr, err = c.udpSocket.ReadFromUDP(b)
+ 		if err != nil {
+ 			return 0, err
+ 		}
+@@ -346,7 +353,7 @@
+ 
+ func (c *udpConn) Write(b []byte) (n int, err error) {
+ 	//log.Printf("-> %x", b)
+-	return c.UDPConn.WriteToUDP(b, c.addr)
++	return c.udpSocket.WriteToUDP(b, c.addr)
+ }
+ 
+ func (c *udpConn) RemoteAddr() net.Addr {
+@@ -365,7 +372,7 @@
+ 	buf := make([]byte, 1200)
+ 
+ 	for {
+-		n, addr, err := c.UDPConn.ReadFromUDP(buf)
++		n, addr, err := c.udpSocket.ReadFromUDP(buf)
+ 		if err != nil {
+ 			return nil, err
+ 		}
+--- /dev/null
++++ b/pkg/xiaomi/miss/cs2/udp_relay.go
+@@ -0,0 +1,48 @@
++package cs2
++
++import (
++ "bufio"
++ "encoding/binary"
++ "encoding/json"
++ "errors"
++ "io"
++ "net"
++ "os"
++ "sync"
++ "time"
++)
++
++type udpSocket interface {
++ net.Conn
++ ReadFromUDP([]byte) (int,*net.UDPAddr,error)
++ WriteToUDP([]byte,*net.UDPAddr) (int,error)
++}
++
++// Only enabled on the Windows Docker profile. Other deployments use UDP directly.
++func dialRelayUDP(host string) (udpSocket,error) {
++ conn,err:=net.DialTimeout("tcp",os.Getenv("CAMERAHUB_UDP_RELAY"),3*time.Second)
++ if err!=nil {return nil,errors.New("camera UDP relay unavailable")}
++ conn.SetDeadline(time.Now().Add(3*time.Second))
++ hello:=map[string]string{"host":host,"token":os.Getenv("CAMERAHUB_UDP_TOKEN")}
++ if json.NewEncoder(conn).Encode(hello)!=nil {conn.Close();return nil,errors.New("camera UDP relay handshake failed")}
++ var ack [1]byte
++ if _,err=io.ReadFull(conn,ack[:]);err!=nil||ack[0]!=1 {conn.Close();return nil,errors.New("camera UDP relay rejected destination")}
++ conn.SetDeadline(time.Time{})
++ return &relayUDP{Conn:conn,reader:bufio.NewReader(conn),ip:net.ParseIP(host)},nil
++}
++
++type relayUDP struct { net.Conn; reader *bufio.Reader; ip net.IP; writeMu sync.Mutex }
++func(c *relayUDP) ReadFromUDP(b []byte)(int,*net.UDPAddr,error){
++ var header [4]byte
++ if _,err:=io.ReadFull(c.reader,header[:]);err!=nil{return 0,nil,err}
++ size:=int(binary.BigEndian.Uint16(header[2:]));port:=int(binary.BigEndian.Uint16(header[:2]))
++ if size<4||size>2048||size>len(b)||port<1024 {return 0,nil,errors.New("invalid camera relay frame")}
++ _,err:=io.ReadFull(c.reader,b[:size]);return size,&net.UDPAddr{IP:c.ip,Port:port},err
++}
++func(c *relayUDP) WriteToUDP(b []byte,addr *net.UDPAddr)(int,error){
++ if len(b)<4||len(b)>2048||!addr.IP.Equal(c.ip)||addr.Port<1024||addr.Port>65535{return 0,errors.New("invalid relay destination")}
++ c.writeMu.Lock();defer c.writeMu.Unlock()
++ frame:=make([]byte,len(b)+4);binary.BigEndian.PutUint16(frame[:2],uint16(addr.Port));binary.BigEndian.PutUint16(frame[2:4],uint16(len(b)));copy(frame[4:],b)
++ for len(frame)>0 {n,err:=c.Conn.Write(frame);if err!=nil{return 0,err};if n==0{return 0,io.ErrShortWrite};frame=frame[n:]}
++ return len(b),nil
++}
+--- /dev/null
++++ b/pkg/xiaomi/miss/cs2/udp_relay_test.go
+@@ -0,0 +1,14 @@
++package cs2
++import("bufio";"encoding/binary";"io";"net";"testing";"time")
++func TestCameraRelayFramingAndBounds(t *testing.T){
++ a,b:=net.Pipe();defer a.Close();defer b.Close();a.SetDeadline(time.Now().Add(time.Second));b.SetDeadline(time.Now().Add(time.Second))
++ c:=&relayUDP{Conn:a,reader:bufio.NewReader(a),ip:net.ParseIP("172.16.0.202")}
++ go func(){b.Write([]byte{0x28,0x3a,0,4,0xf1,0x41,0,0})}()
++ p:=make([]byte,1200);n,addr,err:=c.ReadFromUDP(p);if err!=nil||n!=4||addr.Port!=10298||!addr.IP.Equal(c.ip){t.Fatal("datagram framing")}
++ done:=make(chan []byte,1);go func(){r:=make([]byte,8);io.ReadFull(b,r);done<-r}()
++ if _,err=c.WriteToUDP([]byte{0xf1,0x30,0,0},addr);err!=nil{t.Fatal(err)}
++ if binary.BigEndian.Uint16((<-done)[:2])!=10298{t.Fatal("lost negotiated port")}
++ if _,err=c.WriteToUDP([]byte{0xf1,0x30,0,0},&net.UDPAddr{IP:net.ParseIP("172.16.0.203"),Port:32108});err==nil{t.Fatal("accepted other camera")}
++ go func(){b.Write([]byte{0x28,0x3a,0xff,0xff})}()
++ if _,_,err=c.ReadFromUDP(p);err==nil{t.Fatal("accepted oversized packet")}
++}

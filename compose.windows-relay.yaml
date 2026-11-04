@@ -1,0 +1,19 @@
+# Windows only. Linux gateway handles TCP/TLS; a local authenticated Node relay
+# carries only CS2 UDP to camera addresses from CameraHub's registry.
+services:
+  app:
+    environment:
+      GO2RTC_URL: ${CAMERAHUB_NATIVE_GATEWAY_URL:?Use scripts/Start-Live.ps1}
+      CAMERAHUB_RELAY_HOSTS_FILE: /gateway-state/relay-hosts.json
+    volumes:
+      - type: bind
+        source: ./data/windows-live-gateway
+        target: /gateway-state
+  gateway:
+    image: camerahub/gateway:1.9.14-relay-amd64
+    volumes:
+      - type: bind
+        source: ./data/windows-live-gateway
+        target: /config
+    env_file: [./data/windows-live-gateway/relay.env]
+    command: ["-config", "/config/docker-relay.json"]

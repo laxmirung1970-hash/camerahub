@@ -1,0 +1,4 @@
+#!/bin/sh
+# Refuse to push anything that still contains private data. Enable once per clone:
+#   git config core.hooksPath .githooks
+exec node "$(git rev-parse --show-toplevel)/scripts/check-private.mjs"

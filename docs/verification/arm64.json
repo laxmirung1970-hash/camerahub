@@ -1,0 +1,34 @@
+[
+  {
+    "image": "camerahub/app:1.0.0-arm64",
+    "binary": "/usr/local/bin/camerahub",
+    "architecture": "arm64",
+    "machine": 183,
+    "checked": true,
+    "executedOnNAS": false
+  },
+  {
+    "image": "camerahub/gateway:1.9.14-control-arm64",
+    "binary": "/usr/local/bin/go2rtc",
+    "architecture": "arm64",
+    "machine": 183,
+    "checked": true,
+    "executedOnNAS": false
+  },
+  {
+    "image": "camerahub/gateway:1.9.14-control-arm64",
+    "binary": "/usr/bin/ffmpeg",
+    "architecture": "arm64",
+    "machine": 183,
+    "checked": true,
+    "executedOnNAS": false
+  },
+  {
+    "image": "camerahub/gateway:1.9.14-control-arm64",
+    "binary": "/lib/ld-musl-aarch64.so.1",
+    "architecture": "arm64",
+    "machine": 183,
+    "checked": true,
+    "executedOnNAS": false
+  }
+]

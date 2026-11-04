@@ -1,0 +1,38 @@
+node_modules/
+web/dist/
+data/
+releases/
+android-tv/.gradle/
+android-tv/local.properties
+android-tv/app/build/
+android-tv/keystore.properties
+*.keystore
+*.jks
+.env
+*.cambackup
+test-results/
+playwright-report/
+.cache/
+runtime/windows/
+*.log
+
+# tool caches / build info
+android-tv/.kotlin/
+*.tsbuildinfo
+.vercel/
+.claude/settings.local.json
+# exported images, archives, keys
+*.tar
+*.p12
+*.pfx
+*.pem
+*.key
+# env files (keep the example)
+.env.*
+!.env.example
+# owner-only notes and field data (never committed)
+private/
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.idea/

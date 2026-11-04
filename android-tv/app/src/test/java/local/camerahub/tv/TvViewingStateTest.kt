@@ -1,0 +1,61 @@
+package local.camerahub.tv
+
+import org.junit.Assert.*
+import org.junit.Test
+
+class TvViewingStateTest {
+    private fun cameras() = (0 until 17).map { TvCamera("id$it", "กล้อง $it", status = if (it % 3 == 0) "offline" else "online") }
+    @Test fun tourIncludesProblemCamerasAndWrapsAcrossFivePages() {
+        val state = TvViewingState().apply { replace(cameras()) }
+        val visited = mutableListOf<String>()
+        repeat(5) { visited += state.showing.map { it.id }; state.step(1) }
+        assertEquals(cameras().map { it.id }, visited)
+        assertEquals(0, state.page); assertEquals(4, state.showing.size)
+        state.step(-1); assertEquals(listOf("id16"), state.showing.map { it.id })
+    }
+    @Test fun singleBackRestoresSameCameraAndPageAfterMetadataRefresh() {
+        val state = TvViewingState().apply { replace(cameras()); step(1); focus("id6"); open("id6") }
+        state.replace(cameras().map { it.copy(name = "ชื่อใหม่ ${it.id}", model = "xiaomi.camera.c302n") })
+        assertTrue(state.single); assertEquals("id6", state.activeId)
+        assertEquals("Xiaomi C302", state.active?.modelLabel)
+        state.grid()
+        assertEquals(1, state.page); assertEquals("id6", state.activeId)
+        assertEquals(listOf("id4", "id5", "id6", "id7"), state.showing.map { it.id })
+    }
+    @Test fun cameraRemovedWhileWatchingAndEmptyCatalogRemainSafe() {
+        val state = TvViewingState().apply { replace(cameras()); open("id16") }
+        state.replace(cameras().take(2))
+        assertFalse(state.single); assertEquals(0, state.page); assertEquals("id0", state.activeId)
+        state.replace(emptyList()); state.step(1); state.open("missing")
+        assertTrue(state.showing.isEmpty()); assertEquals("", state.activeId)
+    }
+    @Test fun singleNextWrapsAndBackReturnsToItsOwnGridPage() {
+        val state = TvViewingState().apply { replace(cameras()); open("id16"); step(1) }
+        assertEquals("id0", state.activeId); assertTrue(state.single)
+        state.step(-1); state.grid()
+        assertEquals(4, state.page); assertEquals("id16", state.activeId)
+    }
+    @Test fun partialGridHasNoUnreachableCameraOrFocusTrap() {
+        assertEquals(1, TvGridFocus.target(0, 4, TvGridFocus.Direction.RIGHT))
+        assertEquals(3, TvGridFocus.target(1, 4, TvGridFocus.Direction.DOWN))
+        assertEquals(-1, TvGridFocus.target(3, 4, TvGridFocus.Direction.DOWN))
+        assertEquals(2, TvGridFocus.target(2, 3, TvGridFocus.Direction.RIGHT))
+        assertEquals(-1, TvGridFocus.target(0, 1, TvGridFocus.Direction.DOWN))
+        assertEquals(0, TvGridFocus.target(0, 1, TvGridFocus.Direction.UP))
+    }
+    @Test fun tourWaitsForInactivityAndPausesInSingleMenusAndPtz() {
+        var now = 0L; val clock = TvTourClock({ now })
+        now = 29_001; assertEquals(1, clock.secondsLeft()); assertFalse(clock.due(true, false, false, 17))
+        now = 30_000; assertTrue(clock.due(true, false, false, 17))
+        assertFalse(clock.due(true, true, false, 17)); assertFalse(clock.due(true, false, true, 17))
+        assertFalse(clock.due(false, false, false, 17)); assertFalse(clock.due(true, false, false, 4))
+        clock.touch(); now += 2000; assertEquals(28, clock.secondsLeft())
+    }
+    @Test fun retryBackoffIsBoundedAndModelAndErrorsAreReadable() {
+        assertEquals(listOf(10_000L, 20_000L, 40_000L, 60_000L, 60_000L), (0..4).map(TvRetryPolicy::delayMs))
+        assertEquals(60_000L, TvRetryPolicy.delayMs(Int.MAX_VALUE))
+        assertEquals("Xiaomi C300 Dual", TvCamera("x", "บ้าน", "chuangmi.camera.072ae2").modelLabel)
+        assertFalse(TvCamera("x", "บ้าน", message = "อ่าน rtsp://user:secret@host/a ไม่ได้").problem.contains("secret"))
+        assertTrue(TvCamera("x", "บ้าน", status = "auth_expired").accountBlocked)
+    }
+}

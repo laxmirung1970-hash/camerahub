@@ -1,0 +1,15 @@
+{
+  "testedAt": "2026-10-28T12:18:47.245Z",
+  "results": [
+    "15 demo cameras, brand counts and source privacy: PASS",
+    "Anonymous camera and media protection: PASS",
+    "Four simultaneous authenticated HLS decoders, H.264/AAC and HD switch: PASS",
+    "Shared FFmpeg H.264/AAC compatibility derivative: PASS",
+    "Metadata persistence across sync: PASS",
+    "Offline and expired-account states refuse playback/control: PASS",
+    "Simulated PTZ start/stop (not a hardware test): PASS",
+    "Add 16th camera and restore encrypted backup: PASS",
+    "Pairing, TV permission boundary and revocation: PASS"
+  ],
+  "fieldTested": false
+}

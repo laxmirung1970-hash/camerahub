@@ -1,0 +1,28 @@
+name: camerahub-demo
+services:
+  app:
+    image: camerahub/app:1.0.0-amd64
+    build: { context: ., dockerfile: Dockerfile }
+    ports: ["127.0.0.1:17800:8080"]
+    environment:
+      APP_MODE: demo
+      GO2RTC_URL: http://gateway:1984
+      GATEWAY_CONFIG: /gateway-state/go2rtc.yaml
+      APP_WEBRTC: "false"
+    volumes: ["demo-data:/data", "demo-gateway:/gateway-state"]
+    depends_on: [gateway]
+    restart: unless-stopped
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+    security_opt: ["no-new-privileges:true"]
+  gateway:
+    image: camerahub/gateway:1.9.14-control-amd64
+    build: { context: ., dockerfile: deploy/go2rtc.Dockerfile }
+    volumes: ["demo-gateway:/config", "./media:/media:ro"]
+    restart: unless-stopped
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+    security_opt: ["no-new-privileges:true"]
+volumes:
+  demo-data:
+  demo-gateway:

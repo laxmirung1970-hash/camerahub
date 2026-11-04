@@ -1,0 +1,13 @@
+# Windows-only override: receive Xiaomi UDP on Windows without Docker Desktop NAT.
+# Start through Start-CameraHub-Live.cmd; the launcher supplies the private API URL.
+services:
+  app:
+    environment:
+      GO2RTC_URL: ${CAMERAHUB_NATIVE_GATEWAY_URL:?Use scripts/Start-Live.ps1}
+    volumes:
+      - type: bind
+        source: ./data/windows-live-gateway
+        target: /gateway-state
+    depends_on: !reset []
+  gateway:
+    profiles: [docker-gateway]

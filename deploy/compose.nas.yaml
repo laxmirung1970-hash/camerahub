@@ -1,0 +1,26 @@
+name: camerahub-live
+services:
+  app:
+    image: camerahub/app:1.0.0-arm64
+    network_mode: host
+    environment:
+      APP_MODE: live
+      APP_LISTEN: 127.0.0.1:8080
+      GO2RTC_URL: http://127.0.0.1:1984
+      GATEWAY_CONFIG: /gateway-state/go2rtc.yaml
+      APP_SECURE_COOKIES: "true"
+      APP_WEBRTC: "false"
+    volumes: ["./data:/data", "./gateway:/gateway-state"]
+    restart: unless-stopped
+    depends_on: [gateway]
+    security_opt: ["no-new-privileges:true"]
+  gateway:
+    image: camerahub/gateway:1.9.14-control-arm64
+    network_mode: host
+    environment: { GATEWAY_LISTEN: "127.0.0.1:1984" }
+    volumes: ["./gateway:/config"]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+# Install native Tailscale on DSM and Serve HTTPS to 127.0.0.1:8080.
+# Both the admin gateway and application listen on loopback; no router ports needed.
+# Host networking allows ONVIF multicast discovery after the owner enables it.
