@@ -111,7 +111,7 @@ DS223 มี RAM 2 GB จึงยังไม่ยืนยันจำนว�
 - บน Vercel (Root Directory = `web`): `VITE_API_BASE=https://<โดเมนเครื่องกลาง>` ค่าถูกฝังตอน build ต้อง deploy ใหม่เมื่อเปลี่ยน
 - บนเครื่องกลาง: `APP_ALLOWED_ORIGINS=https://<โปรเจกต์>.vercel.app` (และ `APP_TRUSTED_PROXY` เมื่ออยู่หลัง tunnel) มิฉะนั้นเบราว์เซอร์จะถูกบล็อกด้วย CORS
 
-ถ้าไม่ตั้งค่าทั้งสองฝั่ง หน้าเว็บบน Vercel จะเปิดได้แต่แสดง "ขาดการเชื่อมต่อเครื่องกลาง" ซึ่งเป็นพฤติกรรมปกติ ข้อจำกัด: iPhone Safari ที่เล่น HLS แบบ native ส่ง Bearer token ข้ามโดเมนไม่ได้ ใช้ผ่าน NAS HTTPS โดเมนเดียวกันแทน
+ขั้นตอนทำเองทีละข้อ (Tailscale Funnel / Cloudflare Tunnel, แก้ compose, ตั้งค่า Vercel, ตรวจกล้องจริง) อยู่ใน [docs/REMOTE_SETUP.th.md](docs/REMOTE_SETUP.th.md) ถ้าไม่ตั้งค่าทั้งสองฝั่ง หน้าเว็บบน Vercel จะเปิดได้แต่แสดง "ขาดการเชื่อมต่อเครื่องกลาง" ซึ่งเป็นพฤติกรรมปกติ ข้อจำกัด: iPhone Safari ที่เล่น HLS แบบ native ส่ง Bearer token ข้ามโดเมนไม่ได้ ใช้ผ่าน NAS HTTPS โดเมนเดียวกันแทน
 
 ## สำหรับพัฒนาต่อ
 
