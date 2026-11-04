@@ -36,3 +36,4 @@ private/
 .DS_Store
 Thumbs.db
 .idea/
+/.claude/launch.json

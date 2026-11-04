@@ -81,12 +81,16 @@ func runes(s string) int       { return utf8.RuneCountInString(s) }
 func ok(w http.ResponseWriter) { jsonOut(w, 200, map[string]bool{"ok": true}) }
 
 // Shared handler guards. Each writes the response itself and returns false.
+// cameraFromPath resolves {id} for the caller; a camera outside a share link's
+// scope looks exactly like a missing one.
 func (a *App) cameraFromPath(w http.ResponseWriter, r *http.Request) (Camera, bool) {
-	c, err := a.store.camera(r.PathValue("id"))
-	if err != nil {
+	id := r.PathValue("id")
+	c, err := a.store.camera(id)
+	if err != nil || !principalOf(r).allows(id) {
 		fail(w, 404, "ไม่พบกล้อง")
+		return Camera{}, false
 	}
-	return c, err == nil
+	return c, true
 }
 func cameraUnavailable(c Camera) bool { return c.Status == "offline" || c.Status == "auth_expired" }
 func (a *App) liveOnly(msg string, next http.HandlerFunc) http.HandlerFunc {
@@ -248,6 +252,18 @@ func (a *App) listCameras(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		fail(w, 500, "อ่านรายการกล้องไม่ได้")
 		return
+	}
+	p := principalOf(r)
+	if p.Cameras != nil {
+		// Share links see only their cameras and never the LAN address or device id.
+		scoped := []Camera{}
+		for _, c := range cs {
+			if p.allows(c.ID) {
+				c.Host, c.Ref = "", ""
+				scoped = append(scoped, c)
+			}
+		}
+		cs = scoped
 	}
 	jsonOut(w, 200, cs)
 }
@@ -544,7 +560,7 @@ func (a *App) pairRoutes(m *http.ServeMux) {
 		defer a.mu.Unlock()
 		for _, p := range a.pairs {
 			if strings.EqualFold(p.Code, strings.TrimSpace(b.Code)) && !p.Approved && time.Now().Before(p.Expires) {
-				tok, err := a.issueSession(w, r, p.Name, "tv", false)
+				tok, err := a.issueSession(w, r, p.Name, "tv", false, nil)
 				if err != nil {
 					fail(w, 500, "จับคู่ไม่สำเร็จ")
 					return

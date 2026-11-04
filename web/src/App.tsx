@@ -240,7 +240,7 @@ export default function App() {
           </aside>
         )}
       </div>
-      {modal && <SettingsModal tab={modal} setTab={setModal} boot={boot} onClose={() => setModal("")} notify={notify} refresh={refresh} />}
+      {modal && <SettingsModal tab={modal} setTab={setModal} boot={boot} cameras={cams} onClose={() => setModal("")} notify={notify} refresh={refresh} />}
       {toast && <Toast toast={toast} onClose={() => setToast(undefined)} />}
     </div>
   );

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -90,15 +91,27 @@ func (a *App) initSetup(dir string) error {
 	return os.WriteFile(filepath.Join(dir, a.mode+"-setup-code.txt"), []byte(code), 0600)
 }
 
-// issueSession stores a hashed token. The cookie is skipped for TV tokens and
-// for allowlisted cross-origin logins, which keep the token themselves.
-func (a *App) issueSession(w http.ResponseWriter, r *http.Request, name, kind string, cookie bool) (string, error) {
+// issueSession stores a hashed token. The cookie is skipped for TV and share
+// tokens and for allowlisted cross-origin logins, which keep the token themselves.
+// cameras is nil for owner/TV; a share link stores its exact camera allowlist.
+func (a *App) issueSession(w http.ResponseWriter, r *http.Request, name, kind string, cookie bool, cameras []string) (string, error) {
 	tok := randomToken(32)
 	days := 14
-	if kind == "tv" {
+	switch kind {
+	case "tv":
 		days = 90
+	case "share":
+		days = 365
 	}
-	_, err := a.store.DB.Exec("INSERT INTO sessions(hash,name,kind,expires) VALUES(?,?,?,?)", tokenHash(tok), name, kind, time.Now().Add(time.Duration(days)*24*time.Hour).Unix())
+	var scope any
+	if cameras != nil {
+		raw, err := json.Marshal(cameras)
+		if err != nil {
+			return "", err
+		}
+		scope = string(raw)
+	}
+	_, err := a.store.DB.Exec("INSERT INTO sessions(hash,name,kind,expires,cameras) VALUES(?,?,?,?,?)", tokenHash(tok), name, kind, time.Now().Add(time.Duration(days)*24*time.Hour).Unix(), scope)
 	if err != nil {
 		return "", err
 	}
@@ -109,7 +122,7 @@ func (a *App) issueSession(w http.ResponseWriter, r *http.Request, name, kind st
 }
 func (a *App) finishLogin(w http.ResponseWriter, r *http.Request, name string, wantToken bool, status int) {
 	cross := a.crossOriginAllowed(r)
-	tok, err := a.issueSession(w, r, name, "owner", !cross)
+	tok, err := a.issueSession(w, r, name, "owner", !cross, nil)
 	if err != nil {
 		fail(w, 500, "สร้างเซสชันไม่สำเร็จ")
 		return
@@ -151,9 +164,19 @@ func (a *App) principal(r *http.Request) (Principal, bool) {
 	}
 	var p Principal
 	var expires int64
+	var scope sql.NullString
 	p.ID = tokenHash(tok)
-	err := a.store.DB.QueryRow("SELECT name,kind,expires FROM sessions WHERE hash=?", p.ID).Scan(&p.Name, &p.Kind, &expires)
-	return p, err == nil && expires > time.Now().Unix()
+	err := a.store.DB.QueryRow("SELECT name,kind,expires,cameras FROM sessions WHERE hash=?", p.ID).Scan(&p.Name, &p.Kind, &expires, &scope)
+	if err != nil || expires <= time.Now().Unix() {
+		return Principal{}, false
+	}
+	if scope.Valid {
+		if json.Unmarshal([]byte(scope.String), &p.Cameras) != nil || p.Cameras == nil {
+			// A share row whose scope cannot be read must not widen to every camera.
+			p.Cameras = []string{}
+		}
+	}
+	return p, true
 }
 
 type principalKey struct{}
@@ -343,7 +366,7 @@ func (a *App) authRoutes(m *http.ServeMux) {
 		ok(w)
 	}))
 	m.HandleFunc("GET /api/devices", a.require(true, func(w http.ResponseWriter, r *http.Request) {
-		rows, err := a.store.DB.Query("SELECT hash,name,expires FROM sessions WHERE kind='tv' AND expires>?", time.Now().Unix())
+		rows, err := a.store.DB.Query("SELECT hash,name,kind,expires,cameras FROM sessions WHERE kind IN ('tv','share') AND expires>?", time.Now().Unix())
 		if err != nil {
 			fail(w, 500, "อ่านอุปกรณ์ไม่สำเร็จ")
 			return
@@ -351,21 +374,68 @@ func (a *App) authRoutes(m *http.ServeMux) {
 		defer rows.Close()
 		out := []map[string]any{}
 		for rows.Next() {
-			var hash, name string
+			var hash, name, kind string
 			var expires int64
-			if rows.Scan(&hash, &name, &expires) == nil {
-				out = append(out, map[string]any{"id": hash, "name": name, "expires": expires})
+			var scope sql.NullString
+			if rows.Scan(&hash, &name, &kind, &expires, &scope) == nil {
+				item := map[string]any{"id": hash, "name": name, "kind": kind, "expires": expires}
+				if scope.Valid {
+					cameras := []string{}
+					_ = json.Unmarshal([]byte(scope.String), &cameras)
+					item["cameras"] = cameras
+				}
+				out = append(out, item)
 			}
 		}
 		jsonOut(w, 200, out)
 	}))
 	m.HandleFunc("DELETE /api/devices/{id}", a.require(true, func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		if _, err := a.store.DB.Exec("DELETE FROM sessions WHERE hash=? AND kind='tv'", id); err != nil {
+		if _, err := a.store.DB.Exec("DELETE FROM sessions WHERE hash=? AND kind IN ('tv','share')", id); err != nil {
 			fail(w, 500, "ยกเลิกอุปกรณ์ไม่สำเร็จ")
 			return
 		}
 		a.stopPrincipal(id)
 		ok(w)
+	}))
+	// A share link is a view-only session scoped to a few cameras. The token is
+	// returned once; the link that carries it is the credential.
+	m.HandleFunc("POST /api/shares", a.require(true, func(w http.ResponseWriter, r *http.Request) {
+		var b struct {
+			Name    string   `json:"name"`
+			Cameras []string `json:"cameras"`
+		}
+		if !readJSON(w, r, &b) {
+			return
+		}
+		b.Name = strings.TrimSpace(b.Name)
+		if b.Name == "" || runes(b.Name) > 80 {
+			fail(w, 400, "ระบุชื่อลิงก์ไม่เกิน 80 ตัวอักษร")
+			return
+		}
+		if len(b.Cameras) == 0 || len(b.Cameras) > 8 {
+			fail(w, 400, "เลือกกล้อง 1 ถึง 8 ตัว")
+			return
+		}
+		seen := map[string]bool{}
+		ids := make([]string, 0, len(b.Cameras))
+		for _, id := range b.Cameras {
+			if seen[id] {
+				continue
+			}
+			if _, err := a.store.camera(id); err != nil {
+				fail(w, 404, "ไม่พบกล้อง")
+				return
+			}
+			seen[id] = true
+			ids = append(ids, id)
+		}
+		tok, err := a.issueSession(w, r, b.Name, "share", false, ids)
+		if err != nil {
+			fail(w, 500, "สร้างลิงก์แชร์ไม่สำเร็จ")
+			return
+		}
+		a.store.event("share", "สร้างลิงก์แชร์ "+b.Name)
+		jsonOut(w, 201, map[string]string{"token": tok})
 	}))
 }

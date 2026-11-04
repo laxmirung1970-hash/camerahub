@@ -8,7 +8,7 @@ The Go process serves static UI, auth, SQLite, discovery workers, metadata, PTZ 
 
 Demo and live use distinct SQLite databases and 32-byte encryption keys. Demo seeds 2 Tapo + 13 Xiaomi records. Video fixtures are original synthetic 12-second looping H.264/AAC clips with a moving target and quiet tones, not recordings from real cameras. `Source` is AES-GCM encrypted in SQLite. The storage key is in a mode-specific 0600 file under a 0700 directory. go2rtc's token/config directory is also private. Never include either directory in a source/archive release.
 
-Owner passwords use Argon2id. Sessions are random 256-bit tokens, stored hashed in SQLite, 14-day owner/90-day TV expiry. Cookies are HttpOnly/SameSite Strict; NAS enables Secure cookies. Mutating browser requests reject foreign Origin/Sec-Fetch-Site. Pairing codes expire in five minutes and require an authenticated owner; delivery also requires a separate 256-bit polling secret and happens once. Device revocation invalidates subsequent API/media requests; an already buffered video chunk is not remotely erased.
+Owner passwords use Argon2id. Sessions are random 256-bit tokens, stored hashed in SQLite, 14-day owner/90-day TV/365-day share expiry. A share session (`kind=share`, `sessions.cameras` JSON allowlist) is the credential behind a family link `https://<lite UI>/#<token>`: it lists and streams only its cameras (`host`/`ref` stripped), gets 404 for any other camera id, 403 for PTZ and every owner route, and is revoked like a TV from `/api/devices`. `GET /api/media/hls/{file}` cannot map a go2rtc HLS session back to a camera, so a share token can fetch segments of an HLS session whose id it learned elsewhere; the same limit applies to TV tokens. Cookies are HttpOnly/SameSite Strict; NAS enables Secure cookies. Mutating browser requests reject foreign Origin/Sec-Fetch-Site. Pairing codes expire in five minutes and require an authenticated owner; delivery also requires a separate 256-bit polling secret and happens once. Device revocation invalidates subsequent API/media requests; an already buffered video chunk is not remotely erased.
 
 Cross-origin UI (the Vercel-hosted build) is opt-in. With `APP_ALLOWED_ORIGINS` unset the server is byte-identical to the cookie-only behaviour above: no `Access-Control-*` headers, foreign `Origin`/`Sec-Fetch-Site: cross-site` mutations rejected. When set (comma-separated exact origins, e.g. `https://camerahub.vercel.app`), those origins get an exact `Access-Control-Allow-Origin` echo with credentials, a 204 preflight, and `POST /api/setup` / `POST /api/login` return `{"token"}` instead of setting a cookie. The token is sent as `Authorization: Bearer` on fetch and HLS requests and as the WebSocket subprotocol pair `Sec-WebSocket-Protocol: bearer, <token>` (never a query string); the server echoes `bearer`. Same-origin clients may also ask for a token with `{"token":true}`. `APP_TRUSTED_PROXY=<ip>` makes rate limiting read the rightmost `X-Forwarded-For` entry only when the connection comes from that proxy. Configuration is read once at startup (`backend/config.go`).
 
@@ -21,21 +21,22 @@ Windows manual-IP live entry point: `compose.windows-live.yaml` uses the same am
 | GET `/api/bootstrap`, `/api/health` | mode, setup/login state; process health | public, no secrets |
 | POST `/api/setup`, `/api/login` | bootstrap-code owner setup; password login | rate limited |
 | POST `/api/logout` | revoke caller session | authenticated |
-| GET `/api/cameras` | metadata and capability/verification flags | owner / TV |
+| GET `/api/cameras` | metadata and capability/verification flags; a share link sees only its cameras, without `host`/`ref` | owner / TV / share |
 | PATCH `/api/cameras/{id}` | label, room, favorite, playback/PTZ profile, manual field verification | owner |
 | POST `/api/cameras/{id}/probe` | negotiate a real video consumer; does not certify audio/PTZ | owner |
 | POST `/api/cameras/{id}/ptz` | `{direction:left/right/up/down/stop}` | owner / TV |
-| GET `/api/cameras/{id}/ws` | authenticated MSE WebSocket; allowlisted negotiation messages | owner / TV |
-| POST `/api/cameras/{id}/webrtc` | SDP proxy; separate Opus audio profile | owner / TV |
-| GET `/api/cameras/{id}/hls` | HLS master playlist, `quality=low/high` | owner / TV |
-| GET `/api/media/hls/{file}` | allowlisted playlists/segments, rewritten local paths | owner / TV |
+| GET `/api/cameras/{id}/ws` | authenticated MSE WebSocket; allowlisted negotiation messages | owner / TV / share (scoped) |
+| POST `/api/cameras/{id}/webrtc` | SDP proxy; separate Opus audio profile | owner / TV / share (scoped) |
+| GET `/api/cameras/{id}/hls` | HLS master playlist, `quality=low/high` | owner / TV / share (scoped) |
+| GET `/api/media/hls/{file}` | allowlisted playlists/segments, rewritten local paths | owner / TV / share |
 | GET/POST `/api/connections` | encrypted credential config and enabled state | owner |
 | POST `/api/connections/{id}/toggle`, `/api/discover` | explicitly enable/pause or run discovery | owner |
 | POST `/api/cameras/tapo` | manual private-IP ONVIF setup | owner, live only |
 | GET `/api/xiaomi/accounts`, POST `/api/xiaomi/auth` | local gateway login, CAPTCHA/OTP continuation | owner, live only |
 | POST `/api/pair/request`, `/api/pair/poll` | request/wait for owner-approved TV pairing | public, rate limited + secret |
 | POST `/api/pair/approve`, GET `/api/pair/pending` | authorize a displayed code | owner |
-| GET `/api/devices`, DELETE `/api/devices/{id}` | list/revoke paired TVs | owner |
+| GET `/api/devices`, DELETE `/api/devices/{id}` | list/revoke paired TVs and share links (`kind`, `cameras`) | owner |
+| POST `/api/shares` | `{name, cameras:[id…]}` → view-only token scoped to 1–8 cameras, returned once; 365-day expiry | owner |
 | GET `/api/system`, PUT `/api/system/remote` | actual gateway health, app memory/events; saved HTTPS address | owner |
 | POST `/api/backup`, `/api/backup/restore` | scrypt + AES-GCM encrypted snapshot | owner |
 | POST `/api/demo/cameras`, `/api/demo/cameras/{id}/scenario` | grow registry / inject offline or auth expiry | owner, demo only |

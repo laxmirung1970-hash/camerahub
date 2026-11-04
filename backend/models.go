@@ -57,8 +57,24 @@ type Event struct {
 	Kind    string    `json:"kind"`
 	Message string    `json:"message"`
 }
+
+// Principal is the caller behind a session token. Cameras is nil for owner and
+// TV sessions (every camera) and the exact allowlist for a share link.
 type Principal struct {
-	ID   string
-	Kind string
-	Name string
+	ID      string
+	Kind    string
+	Name    string
+	Cameras []string
+}
+
+func (p Principal) allows(cameraID string) bool {
+	if p.Cameras == nil {
+		return true
+	}
+	for _, id := range p.Cameras {
+		if id == cameraID {
+			return true
+		}
+	}
+	return false
 }

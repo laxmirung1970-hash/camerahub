@@ -61,10 +61,13 @@ export function wsUrl(path: string) {
   return u.toString();
 }
 const TOKEN_KEY = "camerahub.token";
+// Cross-origin builds and the lite (share-link) app carry a token; same-origin
+// full builds stay cookie-only.
+const TOKEN_BASED = Boolean(API_BASE) || import.meta.env.VITE_VARIANT === "lite";
 export const tokenStore = {
-  get: () => (API_BASE ? readStorage(TOKEN_KEY) : null),
+  get: () => (TOKEN_BASED ? readStorage(TOKEN_KEY) : null),
   set: (t: string) => {
-    if (API_BASE) writeStorage(TOKEN_KEY, t);
+    if (TOKEN_BASED) writeStorage(TOKEN_KEY, t);
   },
   clear: () => writeStorage(TOKEN_KEY, null),
 };

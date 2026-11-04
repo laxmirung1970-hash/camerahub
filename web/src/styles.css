@@ -1091,6 +1091,77 @@ details > .stack {
   margin-bottom: var(--s2);
 }
 
+/* ---------- share links (settings) ---------- */
+.share-cameras {
+  max-height: 220px;
+  overflow: auto;
+  gap: var(--s1);
+}
+.share-cameras label {
+  cursor: pointer;
+}
+.share-cameras input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+.share-link {
+  display: block;
+  padding: var(--s2);
+  word-break: break-all;
+  user-select: all;
+  background: var(--bg-2);
+  border-radius: var(--r);
+}
+
+/* ---------- lite (family view-only) ---------- */
+.lite .topbar strong {
+  white-space: nowrap;
+}
+.lite .topbar .clock {
+  display: inline;
+}
+.lite-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--s3);
+  padding: var(--s4);
+  min-height: 0;
+  overflow: auto;
+  align-content: start;
+}
+.lite-grid.one {
+  align-content: stretch;
+}
+.lite-grid .tile-video {
+  cursor: pointer;
+  /* Rows are auto-height here, so the 16:9 box must not be a flex: 1 child and
+     must keep its ratio even where the full UI switches to aspect-ratio: auto. */
+  flex: none;
+  aspect-ratio: 16 / 9;
+}
+.lite-grid .tile-caption .name {
+  font-weight: 500;
+}
+.lite-empty {
+  text-align: center;
+  padding: var(--s5);
+}
+@media (orientation: landscape) and (min-width: 640px), (min-width: 700px) {
+  .lite-grid:not(.one) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (min-width: 1000px) {
+  .lite-grid.one {
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .lite-grid.one .tile-video {
+    flex: 1;
+    aspect-ratio: auto;
+  }
+}
+
 /* ---------- TV ---------- */
 body[data-tv] .tile-caption {
   min-height: 44px;

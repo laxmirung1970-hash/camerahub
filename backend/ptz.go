@@ -20,6 +20,10 @@ func (a *App) ptzHandler(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "ทิศทางไม่ถูกต้อง")
 		return
 	}
+	if principalOf(r).Kind == "share" {
+		fail(w, 403, "ลิงก์แชร์ดูได้อย่างเดียว")
+		return
+	}
 	c, e := a.store.camera(r.PathValue("id"))
 	if e != nil {
 		fail(w, 404, "ไม่พบกล้อง")

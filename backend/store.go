@@ -69,8 +69,39 @@ func openStore(dir, mode string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	// Share links scope a session to a camera list; older databases predate the column.
+	if err = addColumn(db, "sessions", "cameras", "TEXT"); err != nil {
+		db.Close()
+		return nil, err
+	}
 	_ = os.Chmod(path, 0600)
 	return &Store{DB: db, Key: key, Mode: mode}, nil
+}
+
+// addColumn is an idempotent ALTER TABLE so startup can run against any older schema.
+func addColumn(db *sql.DB, table, column, typ string) error {
+	rows, err := db.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt any
+		if err = rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	_, err = db.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + typ)
+	return err
 }
 func seal(key, data []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
