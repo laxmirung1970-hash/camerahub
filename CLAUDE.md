@@ -35,6 +35,8 @@ node scripts/integration.mjs
 
 # Android TV: unit tests + lint + signed APK + sha256, built inside Docker
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Build-TV.ps1
+# Install newest releases/camerahub-tv-*.apk on a TV over Wi-Fi (adb from the builder image; Install-TV.cmd for staff)
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Install-TV.ps1 -TvIp <tv-ip>
 # NAS ARM64 images (cross-build, no emulation)
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Build-NAS.ps1
 ```
