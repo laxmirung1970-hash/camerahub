@@ -71,8 +71,11 @@ func cameraID(vendor, ref string) string {
 	h := sha256.Sum256([]byte(vendor + ":" + ref))
 	return vendor + "-" + hex.EncodeToString(h[:8])
 }
+
+// "small" is the low stream scaled to 640 wide for weak grid clients; an h264
+// camera's low stream is already that size.
 func streamName(c Camera, quality string) string {
-	if quality != "high" {
+	if quality != "high" && (quality != "small" || c.PlaybackMode == "h264") {
 		quality = "low"
 	}
 	return c.ID + "_" + quality
@@ -583,8 +586,9 @@ func limitRead(r io.Reader, n int64) ([]byte, error) {
 	return b, e
 }
 func qualityOf(r *http.Request) string {
-	if r.URL.Query().Get("quality") == "high" {
-		return "high"
+	switch q := r.URL.Query().Get("quality"); q {
+	case "high", "small":
+		return q
 	}
 	return "low"
 }

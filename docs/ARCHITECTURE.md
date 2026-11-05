@@ -27,8 +27,10 @@ Windows manual-IP live entry point: `compose.windows-live.yaml` uses the same am
 | POST `/api/cameras/{id}/ptz` | `{direction:left/right/up/down/stop}` | owner / TV |
 | GET `/api/cameras/{id}/ws` | authenticated MSE WebSocket; allowlisted negotiation messages | owner / TV / share (scoped) |
 | POST `/api/cameras/{id}/webrtc` | SDP proxy; separate Opus audio profile | owner / TV / share (scoped) |
-| GET `/api/cameras/{id}/hls` | HLS master playlist, `quality=low/high` | owner / TV / share (scoped) |
-| GET `/api/media/hls/{file}` | allowlisted playlists/segments, rewritten local paths | owner / TV / share |
+| GET `/api/cameras/{id}/hls` | HLS master playlist, `quality=low/high/small` (`small` = low scaled to 640 wide by go2rtc FFmpeg; h264-mode cameras reuse low) | owner / TV / share (scoped) |
+| GET `/api/cameras/{id}/mp4` | continuous fragmented MP4 relayed from go2rtc `/api/stream.mp4?mp4=all` (needs that path in go2rtc `allow_paths`; 404 when the gateway lacks it so clients fall back to HLS), same `quality` values; flushed per chunk, ends after 20 s without data or when the session is revoked. Used by the TV because go2rtc HLS keeps only two 0.5 s segments | owner / TV / share (scoped) |
+| POST `/api/cameras/{id}/warm` | 202; starts the stream and holds one video consumer for 30 s after video begins (max 8 at once, one per stream) so a touring TV finds the next page connected | owner / TV / share (scoped) |
+| GET `/api/media/hls/{file}` | allowlisted playlists/segments, rewritten local paths; init/segment 404s from a session still starting are retried for up to 8 s | owner / TV / share |
 | GET/POST `/api/connections` | encrypted credential config and enabled state | owner |
 | POST `/api/connections/{id}/toggle`, `/api/discover` | explicitly enable/pause or run discovery | owner |
 | POST `/api/cameras/tapo` | manual private-IP ONVIF setup | owner, live only |

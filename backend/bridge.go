@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -23,7 +24,20 @@ type Bridge struct {
 	// Per-stream locks keep gateway I/O outside mu so one slow registration
 	// does not stall every other camera.
 	inflight map[string]*sync.Mutex
+	warming  map[string]bool
 }
+
+// A warm consumer holds a stream this long after video starts, so a client
+// switching to it next joins a camera that is already connected.
+const warmHold = 30 * time.Second
+const maxWarming = 8
+
+// hlsWait bounds how long one HLS file request waits for go2rtc to have it.
+var hlsWait = 8 * time.Second
+
+// mp4Idle ends an MP4 stream that stopped carrying data, so a dead camera
+// does not hold a player and a gateway consumer open.
+var mp4Idle = 20 * time.Second
 
 // Only these two message shapes are relayed between browser and gateway.
 type wsMessage struct {
@@ -80,6 +94,15 @@ func (b *Bridge) dialWS(ctx context.Context, source string) (*websocket.Conn, er
 	return conn, err
 }
 func (b *Bridge) ensure(ctx context.Context, c Camera, q string) error {
+	if q == "small" {
+		if err := b.ensure(ctx, c, "low"); err != nil {
+			return err
+		}
+		if name := streamName(c, q); name != streamName(c, "low") {
+			return b.register(ctx, name, "ffmpeg:"+streamName(c, "low")+"#video=h264#audio=aac#width=640")
+		}
+		return nil
+	}
 	src := c.Source.Low
 	if q == "high" && c.Source.High != "" {
 		src = c.Source.High
@@ -169,8 +192,6 @@ func (b *Bridge) ensureRTC(ctx context.Context, c Camera, quality string) (strin
 	return rtc, b.register(ctx, rtc, "ffmpeg:"+name+"#video=copy#audio=opus")
 }
 func (b *Bridge) probe(ctx context.Context, src string) error {
-	// A 200 from /api/streams only proves registration. Ask for video-only
-	// fragmented MP4 and require media payload, not just codec metadata.
 	conn, err := b.dialWS(ctx, src)
 	if err != nil {
 		return errors.New("stream probe unavailable")
@@ -182,10 +203,56 @@ func (b *Bridge) probe(ctx context.Context, src string) error {
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d
 	}
+	return awaitVideo(conn, deadline)
+}
+
+// warm starts the camera behind a registered stream in the background and
+// keeps one video consumer on it for hold. Xiaomi P2P can take 10–20 s to
+// connect, longer than a TV tour leaves a page on screen.
+func (b *Bridge) warm(src string, hold time.Duration) bool {
+	b.mu.Lock()
+	if b.warming == nil {
+		b.warming = map[string]bool{}
+	}
+	if b.warming[src] || len(b.warming) >= maxWarming {
+		b.mu.Unlock()
+		return false
+	}
+	b.warming[src] = true
+	b.mu.Unlock()
+	go func() {
+		defer func() {
+			b.mu.Lock()
+			delete(b.warming, src)
+			b.mu.Unlock()
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		conn, err := b.dialWS(ctx, src)
+		cancel()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if awaitVideo(conn, time.Now().Add(25*time.Second)) != nil {
+			return
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(hold))
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+	return true
+}
+
+func awaitVideo(conn *websocket.Conn, deadline time.Time) error {
+	// A 200 from /api/streams only proves registration. Ask for video-only
+	// fragmented MP4 and require media payload, not just codec metadata.
 	_ = conn.SetReadDeadline(deadline)
 	_ = conn.SetWriteDeadline(deadline)
 	conn.SetReadLimit(8 << 20)
-	if err = conn.WriteJSON(wsMessage{Type: "mse", Value: "avc1.640029,avc1.64002A,avc1.640033,hvc1.1.6.L153.B0"}); err != nil {
+	if err := conn.WriteJSON(wsMessage{Type: "mse", Value: "avc1.640029,avc1.64002A,avc1.640033,hvc1.1.6.L153.B0"}); err != nil {
 		return errors.New("stream probe unavailable")
 	}
 	negotiated := false
@@ -287,6 +354,8 @@ func (a *App) mediaRoutes(m *http.ServeMux) {
 	m.HandleFunc("POST /api/cameras/{id}/webrtc", a.require(false, a.webrtcHandler))
 	m.HandleFunc("GET /api/cameras/{id}/ws", a.require(false, a.wsHandler))
 	m.HandleFunc("GET /api/cameras/{id}/hls", a.require(false, a.hlsPlaylistHandler))
+	m.HandleFunc("GET /api/cameras/{id}/mp4", a.require(false, a.mp4Handler))
+	m.HandleFunc("POST /api/cameras/{id}/warm", a.require(false, a.warmHandler))
 	m.HandleFunc("GET /api/media/hls/{file}", a.require(false, a.hlsFileHandler))
 }
 func (a *App) webrtcHandler(w http.ResponseWriter, r *http.Request) {
@@ -420,6 +489,105 @@ func pumpToClient(upstream, client *websocket.Conn) {
 		}
 	}
 }
+
+// warmHandler lets a touring client start the next page's cameras ahead of
+// time; it returns at once and the gateway connection is held briefly.
+func (a *App) warmHandler(w http.ResponseWriter, r *http.Request) {
+	c, ok := a.mediaCamera(w, r)
+	if !ok {
+		return
+	}
+	a.bridge.warm(streamName(c, qualityOf(r)), warmHold)
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// mp4Handler relays go2rtc's continuous fragmented MP4. One long response
+// lets the player keep its own buffer, where go2rtc HLS holds about a second.
+func (a *App) mp4Handler(w http.ResponseWriter, r *http.Request) {
+	c, ok := a.mediaCamera(w, r)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	req, e := http.NewRequestWithContext(ctx, "GET", a.bridge.Base+"/api/stream.mp4?src="+url.QueryEscape(streamName(c, qualityOf(r)))+"&mp4=all", nil)
+	if e != nil {
+		fail(w, 502, "เปิดวิดีโอไม่สำเร็จ")
+		return
+	}
+	// The shared client's timeout would cut a live stream; only the wait for
+	// the camera's first bytes is bounded.
+	client := &http.Client{}
+	if a.bridge.Client != nil {
+		client.Transport = a.bridge.Client.Transport
+	}
+	startup := time.AfterFunc(25*time.Second, cancel)
+	res, e := client.Do(req)
+	startup.Stop()
+	if e != nil {
+		fail(w, 502, "เปิดวิดีโอไม่สำเร็จ")
+		return
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		body, _ := limitRead(res.Body, 4096)
+		// A gateway without /api/stream.mp4 in allow_paths answers a plain 404;
+		// clients fall back to HLS on 404.
+		if res.StatusCode == http.StatusNotFound && !strings.Contains(string(body), "stream") {
+			fail(w, 404, "ตัวกลางวิดีโอยังไม่เปิด MP4")
+			return
+		}
+		fail(w, 502, "เปิดวิดีโอไม่สำเร็จ")
+		return
+	}
+	rc := http.NewResponseController(w)
+	_ = rc.SetReadDeadline(time.Time{})
+	contentType := res.Header.Get("Content-Type")
+	if !strings.HasPrefix(contentType, "video/mp4") {
+		contentType = "video/mp4"
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(200)
+	var last atomic.Int64
+	last.Store(time.Now().UnixNano())
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for checks := 1; ; checks++ {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+			if time.Since(time.Unix(0, last.Load())) > mp4Idle {
+				cancel()
+				return
+			}
+			if checks%3 == 0 {
+				if _, ok := a.principal(r); !ok {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	buf := make([]byte, 64<<10)
+	for {
+		n, e := res.Body.Read(buf)
+		if n > 0 {
+			_ = rc.SetWriteDeadline(time.Now().Add(15 * time.Second))
+			if _, we := w.Write(buf[:n]); we != nil || rc.Flush() != nil {
+				break
+			}
+			last.Store(time.Now().UnixNano())
+		}
+		if e != nil {
+			break
+		}
+	}
+	a.stopCamera(c.ID, principalOf(r).ID)
+}
 func (a *App) hlsPlaylistHandler(w http.ResponseWriter, r *http.Request) {
 	c, ok := a.mediaCamera(w, r)
 	if !ok {
@@ -450,7 +618,19 @@ func (a *App) hlsFileHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
+	// go2rtc answers 404 while a fresh session has no init or segment yet.
+	// Waiting here keeps players from treating a camera that is still
+	// connecting as failed and backing off for tens of seconds.
+	retryUntil := time.Now().Add(hlsWait)
 	body, status, e := a.bridge.request(ctx, "GET", "/api/hls/"+file+"?"+q.Encode(), nil)
+	for e == nil && status == http.StatusNotFound && file != "playlist.m3u8" && time.Now().Before(retryUntil) {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(250 * time.Millisecond):
+		}
+		body, status, e = a.bridge.request(ctx, "GET", "/api/hls/"+file+"?"+q.Encode(), nil)
+	}
 	if e != nil || status != 200 {
 		http.Error(w, "media unavailable", 502)
 		return

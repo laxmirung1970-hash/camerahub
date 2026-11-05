@@ -232,6 +232,41 @@ func TestRegisterAllStreamsWaitsForGateway(t *testing.T) {
 	}
 }
 
+func TestSmallQualityScalesLowStream(t *testing.T) {
+	a, _ := testApp(t, "demo")
+	var mu sync.Mutex
+	srcs := map[string]string{}
+	gateway := readyGateway(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "PUT" {
+			mu.Lock()
+			srcs[r.URL.Query().Get("name")] = r.URL.Query().Get("src")
+			mu.Unlock()
+		}
+		w.WriteHeader(200)
+	})
+	a.bridge.Base = gateway.URL
+	cs, _ := a.store.cameras()
+	c := cs[0]
+	if e := a.bridge.ensure(context.Background(), c, "small"); e != nil {
+		t.Fatal(e)
+	}
+	mu.Lock()
+	got := srcs[c.ID+"_small"]
+	low := srcs[c.ID+"_low"] != ""
+	mu.Unlock()
+	if !low || got != "ffmpeg:"+c.ID+"_low#video=h264#audio=aac#width=640" {
+		t.Fatalf("small stream not scaled from low: %q", got)
+	}
+	c.PlaybackMode = "h264"
+	if streamName(c, "small") != streamName(c, "low") || streamName(c, "other") != c.ID+"_low" {
+		t.Fatal("h264 cameras and unknown qualities must use the low stream")
+	}
+	req := httptest.NewRequest("GET", "/x?quality=small", nil)
+	if qualityOf(req) != "small" {
+		t.Fatal("small quality not accepted")
+	}
+}
+
 func TestCleanupRemovesExpiredSessionsAndPairs(t *testing.T) {
 	a, _ := testApp(t, "demo")
 	_, _ = a.store.DB.Exec("INSERT INTO sessions(hash,name,kind,expires) VALUES('old','x','tv',1),('new','y','tv',?)", time.Now().Add(time.Hour).Unix())

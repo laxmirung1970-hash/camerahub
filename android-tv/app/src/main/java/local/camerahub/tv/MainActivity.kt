@@ -2,6 +2,7 @@ package local.camerahub.tv
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -27,7 +28,7 @@ import java.util.concurrent.Executors
 class MainActivity : Activity(), TvMonitorView.Events {
     private enum class Screen { CONNECT, PAIR, HOME }
     private class ApiError(val code: Int, message: String) : Exception(message)
-    private data class Binding(val playback: TvPlayback, val high: Boolean)
+    private data class Binding(val playback: TvPlayback, val quality: String)
     private data class PtzTarget(val camera: String, val address: String, val credential: String)
     private val ui = Handler(Looper.getMainLooper())
     private val io = Executors.newFixedThreadPool(3)
@@ -35,6 +36,10 @@ class MainActivity : Activity(), TvMonitorView.Events {
     private val viewing = TvViewingState()
     private val tour = TvTourClock(SystemClock::elapsedRealtime)
     private val players = linkedMapOf<String, Binding>()
+    /** Cameras whose normal stream is over 1280 wide; the grid asks the hub to scale them. */
+    private val largeCameras = mutableSetOf<String>()
+    /** The upcoming set already asked to start; Xiaomi P2P needs 10–20 s, so the hub starts it 15 s early. */
+    private var warmedKey = ""
     private lateinit var store: SecureStore
     private lateinit var s: TvStyle
     private lateinit var monitor: TvMonitorView
@@ -275,10 +280,11 @@ class MainActivity : Activity(), TvMonitorView.Events {
                 val blocked = monitor.hasOverlay || monitor.controlsFocused || monitor.ptzMode || dialog != null || !windowFocused
                 if (blocked) tour.touch()
                 if (tour.due(tourMode, viewing.single, blocked, viewing.cameras.size)) tourStep()
+                else if (!blocked && tour.running(tourMode, viewing.single, viewing.cameras.size) && tour.secondsLeft(tourMode) <= 15) warmNext()
                 if (!blocked && monitor.cameraFocused && SystemClock.elapsedRealtime() - lastKeyAt >= 8000) monitor.showChrome(false)
                 monitor.updateClock(SimpleDateFormat("HH:mm", Locale.US).format(Date()))
                 if (catalogProblem != null) monitor.updateSummary(catalogProblem!!)
-                else monitor.updateTour(if (tour.running(tourMode, viewing.single, viewing.cameras.size)) tour.secondsLeft() else null, blocked)
+                else monitor.updateTour(if (tour.running(tourMode, viewing.single, viewing.cameras.size)) tour.secondsLeft(tourMode) else null, blocked)
                 ui.postDelayed(this, 1000)
             }
         }; lastKeyAt = SystemClock.elapsedRealtime(); ui.post(heartbeat!!)
@@ -286,8 +292,7 @@ class MainActivity : Activity(), TvMonitorView.Events {
     private fun renderHome(focusCamera: Boolean = false) {
         if (!visible || screen != Screen.HOME) return
         val showing = viewing.showing
-        val high = viewing.single && hd
-        val removed = players.keys.filter { id -> showing.none { it.id == id } || players[id]?.high != high }
+        val removed = players.keys.filter { id -> showing.none { it.id == id } || players[id]?.quality != qualityFor(id) }
         removed.forEach { players.remove(it)?.playback?.release() }
         monitor.render(viewing, isDemo, tourMode, hd, audible)
         for (camera in showing) {
@@ -296,19 +301,26 @@ class MainActivity : Activity(), TvMonitorView.Events {
             else {
                 val tile = monitor.tiles.getValue(camera.id)
                 val gen = generation
-                val playback = TvPlayback(tile, camera, server, token, high, isDemo, ui,
+                val quality = qualityFor(camera.id)
+                val playback = TvPlayback(tile, camera, server, token, quality, isDemo, ui,
                     changed = { ui.post {
                         if (visible && gen == generation && screen == Screen.HOME && monitor.ptzMode && ptzCameraId == camera.id && !tile.isLive) {
                             leavePtz(); toast("ภาพขาดการเชื่อมต่อ · ออกจากโหมดหมุนแล้ว")
                         }
                     } },
                     sessionExpired = { ui.post { if (visible && gen == generation) expireSession() } },
+                    tooLarge = { ui.post { if (visible && gen == generation && !viewing.single && largeCameras.add(camera.id)) renderHome() } },
                 )
-                players[camera.id] = Binding(playback, high)
+                players[camera.id] = Binding(playback, quality)
             }
         }
         updateAudio()
         if (focusCamera) monitor.focusCamera(viewing.activeId)
+    }
+    private fun qualityFor(id: String): String = when {
+        viewing.single && hd -> "high"
+        !viewing.single && id in largeCameras -> "small"
+        else -> "low"
     }
     private fun loadCameras() {
         val gen = generation
@@ -387,6 +399,17 @@ class MainActivity : Activity(), TvMonitorView.Events {
         leavePtz(); audible = false
         viewing.advance(tourMode); tour.touch(); renderHome(true)
     }
+    private fun warmNext() {
+        val next = viewing.upcoming(tourMode).filter { !it.accountBlocked && it.status != "offline" }
+        val key = next.joinToString(",") { it.id }
+        if (key.isEmpty() || key == warmedKey) return
+        warmedKey = key
+        val single = tourMode == TvTourMode.SINGLE
+        for (camera in next) {
+            val quality = if (single) (if (hd) "high" else "low") else if (camera.id in largeCameras) "small" else "low"
+            io.execute { runCatching { api("/cameras/${Uri.encode(camera.id)}/warm?quality=$quality", JSONObject(), timeout = 12_000) } }
+        }
+    }
     private fun updateAudio() { players.forEach { (id, binding) -> binding.playback.volume(audible && viewing.single && id == viewing.activeId) } }
     private fun enterPtz() {
         if (!viewing.single || viewing.active?.ptz != true) { toast("กล้องนี้ยังไม่รองรับคำสั่งหมุน"); return }
@@ -409,10 +432,10 @@ class MainActivity : Activity(), TvMonitorView.Events {
             when (which) {
                 0 -> { players.values.forEach { it.playback.retry() }; loadCameras() }
                 1 -> ui.post { showDialog(AlertDialog.Builder(this).setTitle("รีโมต 3 ปุ่มก็ใช้ได้")
-                    .setMessage("ลูกศร: เลือกกล้องหรือปุ่ม\nOK ที่ภาพ: ดูเดี่ยว\nกลับ: ออกจากหมุน → 4 ช่อง → ออกจากแอป\n\nกดลงจากแถวล่างเพื่อเปลี่ยนชุดหรือเลือกรายชื่อ\nปุ่มสลับ: 4 ช่อง → ทีละกล้อง → พัก\nเปลี่ยนทุก 30 วินาที หยุดขณะใช้เมนู\nแถบเมนูซ่อนเมื่อดูภาพเฉย ๆ กดปุ่มใดก็แสดงอีกครั้ง\n\nหมุนกล้อง: เลือก ‘หมุนกล้อง’ ก่อน กดลูกศรค้างแล้วปล่อยเพื่อหยุด\nChannel + / − ใช้เปลี่ยนชุดหรือกล้องได้ถ้ารีโมตมี")
+                    .setMessage("ลูกศร: เลือกกล้องหรือปุ่ม\nOK ที่ภาพ: ดูเดี่ยว\nกลับ: ออกจากหมุน → 4 ช่อง → ออกจากแอป\n\nกดลงจากแถวล่างเพื่อเปลี่ยนชุดหรือเลือกรายชื่อ\nปุ่มสลับ: 4 ช่อง → ทีละกล้อง → พัก\n4 ช่องเปลี่ยนทุก 30 วินาที ทีละกล้องทุก 12 วินาที หยุดขณะใช้เมนู\nแถบเมนูซ่อนเมื่อดูภาพเฉย ๆ กดปุ่มใดก็แสดงอีกครั้ง\n\nหมุนกล้อง: เลือก ‘หมุนกล้อง’ ก่อน กดลูกศรค้างแล้วปล่อยเพื่อหยุด\nChannel + / − ใช้เปลี่ยนชุดหรือกล้องได้ถ้ารีโมตมี")
                     .setPositiveButton("เข้าใจแล้ว", null).create()) }
                 2 -> showConnect()
-                3 -> ui.post { showDialog(AlertDialog.Builder(this).setTitle("CameraHub TV 1.2.0")
+                3 -> ui.post { showDialog(AlertDialog.Builder(this).setTitle("CameraHub TV 1.3.1")
                     .setMessage("Android 8 ขึ้นไป · เปิดพร้อมกันสูงสุด 4 ภาพ\nใช้ชื่อ ลำดับ และรุ่นจากเครื่องกลาง\n\nความสามารถถอดรหัสภาพ เสียง และรีโมตของทีวีแต่ละรุ่นยังต้องตรวจบนเครื่องจริง\nใช้ HTTPS ผ่าน Tailscale โดยไม่ส่งรหัสผ่านกล้องให้ทีวี")
                     .setPositiveButton("ปิด", null).create()) }
             }

@@ -23,7 +23,7 @@ try {
         try { $taskRng.GetBytes($taskRandom) } finally { $taskRng.Dispose() }
         $taskSecret = -join ($taskRandom | ForEach-Object { $_.ToString('x2') })
         $taskOverlay = @{
-            api = @{ listen='127.0.0.1:17984'; username='camerahub'; password=$taskSecret; local_auth=$true; allow_paths=@('/api','/api/streams','/api/ws','/api/webrtc','/api/stream.m3u8','/api/hls/playlist.m3u8','/api/hls/init.mp4','/api/hls/segment.m4s','/api/hls/segment.ts','/api/xiaomi','/api/xiaomi/command') }
+            api = @{ listen='127.0.0.1:17984'; username='camerahub'; password=$taskSecret; local_auth=$true; allow_paths=@('/api','/api/streams','/api/ws','/api/webrtc','/api/stream.mp4','/api/stream.m3u8','/api/hls/playlist.m3u8','/api/hls/init.mp4','/api/hls/segment.m4s','/api/hls/segment.ts','/api/xiaomi','/api/xiaomi/command') }
             rtsp = @{ listen='127.0.0.1:18554'; username='camerahub'; password=$taskSecret }
             webrtc = @{ listen='' }
             log = @{ level='error' }

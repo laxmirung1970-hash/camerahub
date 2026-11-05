@@ -71,11 +71,37 @@ class TvViewingStateTest {
         assertEquals(TvTourMode.GRID, TvTourMode.from(null)); assertEquals(TvTourMode.OFF, TvTourMode.from(null, legacyAuto = false))
         assertEquals(TvTourMode.SINGLE, TvTourMode.from("single", legacyAuto = false))
     }
+    @Test fun singleCameraTourMovesEvery12SecondsWhileGridKeeps30() {
+        var now = 0L; val clock = TvTourClock({ now })
+        now = 11_001; assertEquals(1, clock.secondsLeft(TvTourMode.SINGLE)); assertFalse(clock.due(TvTourMode.SINGLE, true, false, 17))
+        now = 12_000; assertTrue(clock.due(TvTourMode.SINGLE, true, false, 17)); assertFalse(clock.due(TvTourMode.GRID, false, false, 17))
+        assertEquals(18, clock.secondsLeft(TvTourMode.GRID)); assertFalse(clock.due(TvTourMode.SINGLE, true, true, 17))
+        clock.touch(); now += 2000; assertEquals(10, clock.secondsLeft(TvTourMode.SINGLE))
+    }
+    @Test fun upcomingNamesWhatTheNextTourMoveShowsAndWrapsAround() {
+        val state = TvViewingState(); state.replace(cameras())
+        assertEquals(listOf("id4", "id5", "id6", "id7"), state.upcoming(TvTourMode.GRID).map { it.id })
+        repeat(4) { state.advance(TvTourMode.GRID) }; assertEquals(4, state.page)
+        assertEquals(listOf("id0", "id1", "id2", "id3"), state.upcoming(TvTourMode.GRID).map { it.id })
+        assertEquals(emptyList<String>(), state.upcoming(TvTourMode.SINGLE).map { it.id })
+        state.open("id16"); assertEquals(listOf("id0"), state.upcoming(TvTourMode.SINGLE).map { it.id })
+        val small = TvViewingState(); small.replace(cameras().take(3))
+        assertEquals(emptyList<String>(), small.upcoming(TvTourMode.GRID))
+    }
     @Test fun retryBackoffIsBoundedAndModelAndErrorsAreReadable() {
         assertEquals(listOf(10_000L, 20_000L, 40_000L, 60_000L, 60_000L), (0..4).map(TvRetryPolicy::delayMs))
         assertEquals(60_000L, TvRetryPolicy.delayMs(Int.MAX_VALUE))
         assertEquals("Xiaomi C300 Dual", TvCamera("x", "บ้าน", "chuangmi.camera.072ae2").modelLabel)
         assertFalse(TvCamera("x", "บ้าน", message = "อ่าน rtsp://user:secret@host/a ไม่ได้").problem.contains("secret"))
         assertTrue(TvCamera("x", "บ้าน", status = "auth_expired").accountBlocked)
+    }
+
+    @Test
+    fun liveCatchUpSpeedsUpOnlyWhileFarBehindWithHysteresis() {
+        assertEquals(1f, TvLiveCatchUp.speed(1000, 1f))
+        assertEquals(TvLiveCatchUp.FAST, TvLiveCatchUp.speed(3500, 1f))
+        assertEquals(TvLiveCatchUp.FAST, TvLiveCatchUp.speed(2000, TvLiveCatchUp.FAST))
+        assertEquals(1f, TvLiveCatchUp.speed(2000, 1f))
+        assertEquals(1f, TvLiveCatchUp.speed(1500, TvLiveCatchUp.FAST))
     }
 }

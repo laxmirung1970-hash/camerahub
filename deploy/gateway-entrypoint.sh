@@ -11,6 +11,7 @@ api:
     - /api/streams
     - /api/ws
     - /api/webrtc
+    - /api/stream.mp4
     - /api/stream.m3u8
     - /api/hls/playlist.m3u8
     - /api/hls/init.mp4
@@ -29,6 +30,10 @@ ffmpeg:
 streams:
   _bootstrap: []
 EOF
+fi
+# Configs written before continuous MP4 lack its route; add it once.
+if ! grep -q '^    - /api/stream.mp4$' /config/go2rtc.yaml; then
+  sed -i '/^    - \/api\/stream.m3u8$/i\    - /api/stream.mp4' /config/go2rtc.yaml
 fi
 chown -R 10001:10001 /config
 chmod 700 /config

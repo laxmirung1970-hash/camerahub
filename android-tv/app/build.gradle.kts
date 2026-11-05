@@ -7,8 +7,8 @@ android {
         applicationId = "local.camerahub.tv"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.2.0"
+        versionCode = 7
+        versionName = "1.3.1"
     }
     signingConfigs {
         create("personal") {

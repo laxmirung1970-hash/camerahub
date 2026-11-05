@@ -4,7 +4,7 @@ $taskRelease = Join-Path $taskRoot 'releases'
 New-Item -ItemType Directory -Force -Path $taskRelease | Out-Null
 Push-Location -LiteralPath $taskRoot
 try {
-    foreach ($taskRequired in @('camerahub-tv-1.2.0.apk','camerahub-nas-arm64-images.tar','compose.nas.yaml')) {
+    foreach ($taskRequired in @('camerahub-tv-1.3.1.apk','camerahub-nas-arm64-images.tar','compose.nas.yaml')) {
         if (-not (Test-Path -LiteralPath (Join-Path $taskRelease $taskRequired))) { throw "Missing release file: $taskRequired" }
     }
     if (-not (Test-Path -LiteralPath (Join-Path $taskRoot 'runtime/windows/go2rtc.exe.sha256'))) { throw 'Build the Windows native gateway before packaging.' }

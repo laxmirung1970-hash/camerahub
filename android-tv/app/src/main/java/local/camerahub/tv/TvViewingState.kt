@@ -58,6 +58,16 @@ class TvViewingState {
     fun advance(mode: TvTourMode) {
         if (mode == TvTourMode.SINGLE && !single) (active ?: showing.firstOrNull())?.let { open(it.id) } else step(1)
     }
+    /** Cameras the next [advance] would put on screen that are not showing yet, so they can be started early. */
+    fun upcoming(mode: TvTourMode): List<TvCamera> {
+        if (cameras.isEmpty()) return emptyList()
+        val next = when {
+            mode == TvTourMode.SINGLE && !single -> listOfNotNull(active ?: showing.firstOrNull())
+            single -> listOf(cameras[Math.floorMod(cameras.indexOfFirst { it.id == activeId }.coerceAtLeast(0) + 1, cameras.size)])
+            else -> CameraPaging.items(cameras, CameraPaging.next(page, 1, cameras.size))
+        }
+        return next.filter { n -> showing.none { it.id == n.id } }
+    }
     fun step(delta: Int) {
         if (cameras.isEmpty()) return
         if (single) {
@@ -85,19 +95,19 @@ object TvGridFocus {
     }
 }
 
-/** Remote button cycles GRID → SINGLE → OFF. GRID keeps the default 4-up tour of every camera. */
-enum class TvTourMode(val key: String, val label: String) {
-    GRID("grid", "สลับ: 4 ช่อง"), SINGLE("single", "สลับ: ทีละกล้อง"), OFF("off", "สลับ: พัก");
+/** Remote button cycles GRID → SINGLE → OFF. GRID keeps the default 4-up tour of every camera every 30 s; SINGLE moves every 12 s. */
+enum class TvTourMode(val key: String, val label: String, val intervalMs: Long) {
+    GRID("grid", "สลับ: 4 ช่อง", 30_000), SINGLE("single", "สลับ: ทีละกล้อง", 12_000), OFF("off", "สลับ: พัก", 30_000);
     fun next(): TvTourMode = values()[(ordinal + 1) % values().size]
     companion object {
         fun from(key: String?, legacyAuto: Boolean = true): TvTourMode = values().find { it.key == key } ?: if (legacyAuto) GRID else OFF
     }
 }
 
-class TvTourClock(private val now: () -> Long, val intervalMs: Long = 30_000) {
+class TvTourClock(private val now: () -> Long) {
     private var touchedAt = now()
     fun touch() { touchedAt = now() }
-    fun secondsLeft(): Int = ((intervalMs - (now() - touchedAt)).coerceAtLeast(0) + 999).div(1000).toInt()
+    fun secondsLeft(mode: TvTourMode = TvTourMode.GRID): Int = ((mode.intervalMs - (now() - touchedAt)).coerceAtLeast(0) + 999).div(1000).toInt()
     /** A camera opened by hand in GRID mode stays put; SINGLE mode also moves from the grid into single view. */
     fun running(mode: TvTourMode, single: Boolean, count: Int): Boolean = when (mode) {
         TvTourMode.OFF -> false
@@ -105,7 +115,17 @@ class TvTourClock(private val now: () -> Long, val intervalMs: Long = 30_000) {
         TvTourMode.SINGLE -> count > 1 || (count == 1 && !single)
     }
     fun due(mode: TvTourMode, single: Boolean, blocked: Boolean, count: Int): Boolean =
-        running(mode, single, count) && !blocked && secondsLeft() == 0
+        running(mode, single, count) && !blocked && secondsLeft(mode) == 0
+}
+
+/** Plays slightly fast while more than 3 s is buffered, back to normal under 1.5 s. */
+object TvLiveCatchUp {
+    const val FAST = 1.15f
+    fun speed(bufferedMs: Long, current: Float): Float = when {
+        bufferedMs >= 3000 -> FAST
+        bufferedMs <= 1500 -> 1f
+        else -> current
+    }
 }
 
 object TvRetryPolicy {
