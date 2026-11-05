@@ -65,6 +65,8 @@ type Principal struct {
 	Kind    string
 	Name    string
 	Cameras []string
+	// Set by principal() when a sliding session is due for a new expiry.
+	renew bool
 }
 
 func (p Principal) allows(cameraID string) bool {

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"golang.org/x/crypto/argon2"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -91,18 +92,24 @@ func (a *App) initSetup(dir string) error {
 	return os.WriteFile(filepath.Join(dir, a.mode+"-setup-code.txt"), []byte(code), 0600)
 }
 
+// Owner and TV sessions slide: every day of use pushes expiry out again, so a
+// device in regular use never has to sign in or pair again. Share links do not
+// slide; the owner chose their lifetime when sending them.
+func sessionDays(kind string) int {
+	switch kind {
+	case "tv", "share":
+		return 365
+	}
+	return 180
+}
+func slidingSession(kind string) bool { return kind == "owner" || kind == "tv" }
+
 // issueSession stores a hashed token. The cookie is skipped for TV and share
 // tokens and for allowlisted cross-origin logins, which keep the token themselves.
 // cameras is nil for owner/TV; a share link stores its exact camera allowlist.
 func (a *App) issueSession(w http.ResponseWriter, r *http.Request, name, kind string, cookie bool, cameras []string) (string, error) {
 	tok := randomToken(32)
-	days := 14
-	switch kind {
-	case "tv":
-		days = 90
-	case "share":
-		days = 365
-	}
+	days := sessionDays(kind)
 	var scope any
 	if cameras != nil {
 		raw, err := json.Marshal(cameras)
@@ -170,6 +177,7 @@ func (a *App) principal(r *http.Request) (Principal, bool) {
 	if err != nil || expires <= time.Now().Unix() {
 		return Principal{}, false
 	}
+	p.renew = slidingSession(p.Kind) && time.Until(time.Unix(expires, 0)) < time.Duration(sessionDays(p.Kind)-1)*24*time.Hour
 	if scope.Valid {
 		if json.Unmarshal([]byte(scope.String), &p.Cameras) != nil || p.Cameras == nil {
 			// A share row whose scope cannot be read must not widen to every camera.
@@ -195,6 +203,9 @@ func (a *App) require(owner bool, next http.HandlerFunc) http.HandlerFunc {
 		if owner && p.Kind != "owner" {
 			fail(w, 403, "ต้องใช้บัญชีเจ้าของระบบ")
 			return
+		}
+		if p.renew {
+			a.renewSession(w, r, p)
 		}
 		next(w, r.WithContext(context.WithValue(r.Context(), principalKey{}, p)))
 	}
@@ -438,4 +449,20 @@ func (a *App) authRoutes(m *http.ServeMux) {
 		a.store.event("share", "สร้างลิงก์แชร์ "+b.Name)
 		jsonOut(w, 201, map[string]string{"token": tok})
 	}))
+}
+
+// renewSession extends a sliding session at most once a day. A failed write
+// only means the next request tries again.
+func (a *App) renewSession(w http.ResponseWriter, r *http.Request, p Principal) {
+	days := sessionDays(p.Kind)
+	if _, err := a.store.DB.Exec("UPDATE sessions SET expires=? WHERE hash=?", time.Now().Add(time.Duration(days)*24*time.Hour).Unix(), p.ID); err != nil {
+		log.Printf("renew session: %v", err)
+		return
+	}
+	if bearerToken(r) != "" {
+		return
+	}
+	if cookie, err := r.Cookie("ch_session"); err == nil {
+		http.SetCookie(w, &http.Cookie{Name: "ch_session", Value: cookie.Value, Path: "/", HttpOnly: true, Secure: r.TLS != nil || a.cfg.secureCookies, SameSite: http.SameSiteStrictMode, MaxAge: days * 86400})
+	}
 }
