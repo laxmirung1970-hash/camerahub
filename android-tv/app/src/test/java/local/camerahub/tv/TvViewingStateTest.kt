@@ -45,11 +45,31 @@ class TvViewingStateTest {
     }
     @Test fun tourWaitsForInactivityAndPausesInSingleMenusAndPtz() {
         var now = 0L; val clock = TvTourClock({ now })
-        now = 29_001; assertEquals(1, clock.secondsLeft()); assertFalse(clock.due(true, false, false, 17))
-        now = 30_000; assertTrue(clock.due(true, false, false, 17))
-        assertFalse(clock.due(true, true, false, 17)); assertFalse(clock.due(true, false, true, 17))
-        assertFalse(clock.due(false, false, false, 17)); assertFalse(clock.due(true, false, false, 4))
+        val grid = TvTourMode.GRID
+        now = 29_001; assertEquals(1, clock.secondsLeft()); assertFalse(clock.due(grid, false, false, 17))
+        now = 30_000; assertTrue(clock.due(grid, false, false, 17))
+        assertFalse(clock.due(grid, true, false, 17)); assertFalse(clock.due(grid, false, true, 17))
+        assertFalse(clock.due(TvTourMode.OFF, false, false, 17)); assertFalse(clock.due(grid, false, false, 4))
         clock.touch(); now += 2000; assertEquals(28, clock.secondsLeft())
+    }
+    @Test fun singleTourOpensActiveCameraThenWalksEveryCameraFullScreen() {
+        val state = TvViewingState().apply { replace(cameras()); step(1); focus("id6") }
+        state.advance(TvTourMode.SINGLE)
+        assertTrue(state.single); assertEquals("id6", state.activeId)
+        val visited = mutableListOf<String>()
+        repeat(17) { state.advance(TvTourMode.SINGLE); visited += state.activeId }
+        assertEquals((7 until 17).map { "id$it" } + (0..6).map { "id$it" }, visited)
+        state.grid(); assertEquals(1, state.page)
+        state.advance(TvTourMode.GRID); assertFalse(state.single); assertEquals(2, state.page)
+    }
+    @Test fun singleTourRunsInsideSingleViewAndModeCyclesWithLegacyPreference() {
+        var now = 0L; val clock = TvTourClock({ now }); now = 30_000
+        assertTrue(clock.due(TvTourMode.SINGLE, true, false, 17)); assertTrue(clock.due(TvTourMode.SINGLE, false, false, 4))
+        assertTrue(clock.due(TvTourMode.SINGLE, false, false, 1)); assertFalse(clock.due(TvTourMode.SINGLE, true, false, 1))
+        assertFalse(clock.due(TvTourMode.SINGLE, true, true, 17)); assertFalse(clock.running(TvTourMode.SINGLE, false, 0))
+        assertEquals(listOf(TvTourMode.SINGLE, TvTourMode.OFF, TvTourMode.GRID), listOf(TvTourMode.GRID.next(), TvTourMode.SINGLE.next(), TvTourMode.OFF.next()))
+        assertEquals(TvTourMode.GRID, TvTourMode.from(null)); assertEquals(TvTourMode.OFF, TvTourMode.from(null, legacyAuto = false))
+        assertEquals(TvTourMode.SINGLE, TvTourMode.from("single", legacyAuto = false))
     }
     @Test fun retryBackoffIsBoundedAndModelAndErrorsAreReadable() {
         assertEquals(listOf(10_000L, 20_000L, 40_000L, 60_000L, 60_000L), (0..4).map(TvRetryPolicy::delayMs))

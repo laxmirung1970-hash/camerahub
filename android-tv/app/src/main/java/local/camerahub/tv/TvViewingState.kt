@@ -54,6 +54,10 @@ class TvViewingState {
         activeId = id; page = index / CameraPaging.SIZE; single = true
     }
     fun grid() { single = false; page = CameraPaging.clamp(page, cameras.size) }
+    /** One automatic tour move: next page of 4, or next camera full screen (entering single view first). */
+    fun advance(mode: TvTourMode) {
+        if (mode == TvTourMode.SINGLE && !single) (active ?: showing.firstOrNull())?.let { open(it.id) } else step(1)
+    }
     fun step(delta: Int) {
         if (cameras.isEmpty()) return
         if (single) {
@@ -81,12 +85,27 @@ object TvGridFocus {
     }
 }
 
+/** Remote button cycles GRID → SINGLE → OFF. GRID keeps the default 4-up tour of every camera. */
+enum class TvTourMode(val key: String, val label: String) {
+    GRID("grid", "สลับ: 4 ช่อง"), SINGLE("single", "สลับ: ทีละกล้อง"), OFF("off", "สลับ: พัก");
+    fun next(): TvTourMode = values()[(ordinal + 1) % values().size]
+    companion object {
+        fun from(key: String?, legacyAuto: Boolean = true): TvTourMode = values().find { it.key == key } ?: if (legacyAuto) GRID else OFF
+    }
+}
+
 class TvTourClock(private val now: () -> Long, val intervalMs: Long = 30_000) {
     private var touchedAt = now()
     fun touch() { touchedAt = now() }
     fun secondsLeft(): Int = ((intervalMs - (now() - touchedAt)).coerceAtLeast(0) + 999).div(1000).toInt()
-    fun due(enabled: Boolean, single: Boolean, blocked: Boolean, count: Int): Boolean =
-        enabled && !single && !blocked && count > CameraPaging.SIZE && secondsLeft() == 0
+    /** A camera opened by hand in GRID mode stays put; SINGLE mode also moves from the grid into single view. */
+    fun running(mode: TvTourMode, single: Boolean, count: Int): Boolean = when (mode) {
+        TvTourMode.OFF -> false
+        TvTourMode.GRID -> !single && count > CameraPaging.SIZE
+        TvTourMode.SINGLE -> count > 1 || (count == 1 && !single)
+    }
+    fun due(mode: TvTourMode, single: Boolean, blocked: Boolean, count: Int): Boolean =
+        running(mode, single, count) && !blocked && secondsLeft() == 0
 }
 
 object TvRetryPolicy {

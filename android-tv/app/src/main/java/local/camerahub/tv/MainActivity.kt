@@ -48,7 +48,7 @@ class MainActivity : Activity(), TvMonitorView.Events {
     private var isDemo = false
     private var hd = false
     private var audible = false
-    private var autoTour = true
+    private var tourMode = TvTourMode.GRID
     private var ptzCameraId = ""
     private var ptzTarget: PtzTarget? = null
     private var ptzProblem = "สั่งหมุนไม่สำเร็จ · กรุณาตรวจเครื่องกลาง"
@@ -69,7 +69,7 @@ class MainActivity : Activity(), TvMonitorView.Events {
         window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
         s = TvStyle(this); store = SecureStore(this)
         server = store.server; token = store.token()
-        autoTour = getPreferences(MODE_PRIVATE).getBoolean("autoTour", true)
+        getPreferences(MODE_PRIVATE).let { tourMode = TvTourMode.from(it.getString("tourMode", null), it.getBoolean("autoTour", true)) }
         ptz = TvPtzController(
             send = { target, direction, done ->
                 ptzIo.execute {
@@ -274,11 +274,11 @@ class MainActivity : Activity(), TvMonitorView.Events {
                 if (!visible || screen != Screen.HOME || gen != generation) return
                 val blocked = monitor.hasOverlay || monitor.controlsFocused || monitor.ptzMode || dialog != null || !windowFocused
                 if (blocked) tour.touch()
-                if (tour.due(autoTour, viewing.single, blocked, viewing.cameras.size)) changePage(1, true)
+                if (tour.due(tourMode, viewing.single, blocked, viewing.cameras.size)) tourStep()
                 if (!blocked && monitor.cameraFocused && SystemClock.elapsedRealtime() - lastKeyAt >= 8000) monitor.showChrome(false)
                 monitor.updateClock(SimpleDateFormat("HH:mm", Locale.US).format(Date()))
                 if (catalogProblem != null) monitor.updateSummary(catalogProblem!!)
-                else monitor.updateTour(if (autoTour && viewing.cameras.size > 4) tour.secondsLeft() else null, blocked)
+                else monitor.updateTour(if (tour.running(tourMode, viewing.single, viewing.cameras.size)) tour.secondsLeft() else null, blocked)
                 ui.postDelayed(this, 1000)
             }
         }; lastKeyAt = SystemClock.elapsedRealtime(); ui.post(heartbeat!!)
@@ -289,7 +289,7 @@ class MainActivity : Activity(), TvMonitorView.Events {
         val high = viewing.single && hd
         val removed = players.keys.filter { id -> showing.none { it.id == id } || players[id]?.high != high }
         removed.forEach { players.remove(it)?.playback?.release() }
-        monitor.render(viewing, isDemo, autoTour, hd, audible)
+        monitor.render(viewing, isDemo, tourMode, hd, audible)
         for (camera in showing) {
             val existing = players[camera.id]
             if (existing != null) existing.playback.update(camera)
@@ -359,7 +359,7 @@ class MainActivity : Activity(), TvMonitorView.Events {
             "grid" -> showGrid()
             "picker" -> { leavePtz(); monitor.openPicker(viewing.cameras, viewing.activeId, ::openCamera) }
             "auto" -> {
-                autoTour = !autoTour; getPreferences(MODE_PRIVATE).edit().putBoolean("autoTour", autoTour).apply()
+                tourMode = tourMode.next(); getPreferences(MODE_PRIVATE).edit().putString("tourMode", tourMode.key).apply()
                 tour.touch(); renderHome()
             }
             "audio" -> {
@@ -381,6 +381,11 @@ class MainActivity : Activity(), TvMonitorView.Events {
         leavePtz(); audible = false
         val keepControls = monitor.controlsFocused && !automatic
         viewing.step(step); tour.touch(); renderHome(!keepControls)
+    }
+    private fun tourStep() {
+        if (viewing.cameras.isEmpty()) return
+        leavePtz(); audible = false
+        viewing.advance(tourMode); tour.touch(); renderHome(true)
     }
     private fun updateAudio() { players.forEach { (id, binding) -> binding.playback.volume(audible && viewing.single && id == viewing.activeId) } }
     private fun enterPtz() {
@@ -404,10 +409,10 @@ class MainActivity : Activity(), TvMonitorView.Events {
             when (which) {
                 0 -> { players.values.forEach { it.playback.retry() }; loadCameras() }
                 1 -> ui.post { showDialog(AlertDialog.Builder(this).setTitle("รีโมต 3 ปุ่มก็ใช้ได้")
-                    .setMessage("ลูกศร: เลือกกล้องหรือปุ่ม\nOK ที่ภาพ: ดูเดี่ยว\nกลับ: ออกจากหมุน → 4 ช่อง → ออกจากแอป\n\nกดลงจากแถวล่างเพื่อเปลี่ยนชุดหรือเลือกรายชื่อ\nสลับชุดอัตโนมัติทุก 30 วินาที หยุดขณะใช้เมนู\nแถบเมนูซ่อนเมื่อดูภาพเฉย ๆ กดปุ่มใดก็แสดงอีกครั้ง\n\nหมุนกล้อง: เลือก ‘หมุนกล้อง’ ก่อน กดลูกศรค้างแล้วปล่อยเพื่อหยุด\nChannel + / − ใช้เปลี่ยนชุดหรือกล้องได้ถ้ารีโมตมี")
+                    .setMessage("ลูกศร: เลือกกล้องหรือปุ่ม\nOK ที่ภาพ: ดูเดี่ยว\nกลับ: ออกจากหมุน → 4 ช่อง → ออกจากแอป\n\nกดลงจากแถวล่างเพื่อเปลี่ยนชุดหรือเลือกรายชื่อ\nปุ่มสลับ: 4 ช่อง → ทีละกล้อง → พัก\nเปลี่ยนทุก 30 วินาที หยุดขณะใช้เมนู\nแถบเมนูซ่อนเมื่อดูภาพเฉย ๆ กดปุ่มใดก็แสดงอีกครั้ง\n\nหมุนกล้อง: เลือก ‘หมุนกล้อง’ ก่อน กดลูกศรค้างแล้วปล่อยเพื่อหยุด\nChannel + / − ใช้เปลี่ยนชุดหรือกล้องได้ถ้ารีโมตมี")
                     .setPositiveButton("เข้าใจแล้ว", null).create()) }
                 2 -> showConnect()
-                3 -> ui.post { showDialog(AlertDialog.Builder(this).setTitle("CameraHub TV 1.1.0")
+                3 -> ui.post { showDialog(AlertDialog.Builder(this).setTitle("CameraHub TV 1.2.0")
                     .setMessage("Android 8 ขึ้นไป · เปิดพร้อมกันสูงสุด 4 ภาพ\nใช้ชื่อ ลำดับ และรุ่นจากเครื่องกลาง\n\nความสามารถถอดรหัสภาพ เสียง และรีโมตของทีวีแต่ละรุ่นยังต้องตรวจบนเครื่องจริง\nใช้ HTTPS ผ่าน Tailscale โดยไม่ส่งรหัสผ่านกล้องให้ทีวี")
                     .setPositiveButton("ปิด", null).create()) }
             }

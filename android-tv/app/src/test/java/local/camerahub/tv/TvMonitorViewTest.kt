@@ -45,7 +45,7 @@ class TvMonitorViewTest {
         activity.get().setContentView(monitor); render(); monitor.focusCamera(state.activeId)
     }
     @After fun finish() { activity.pause().stop().destroy() }
-    private fun render() { monitor.render(state, true, true, false, false); layout() }
+    private fun render() { monitor.render(state, true, TvTourMode.GRID, false, false); layout() }
     private fun layout() {
         monitor.measure(View.MeasureSpec.makeMeasureSpec(960, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(540, View.MeasureSpec.EXACTLY))
         monitor.layout(0, 0, 960, 540)
@@ -120,6 +120,7 @@ class TvMonitorViewTest {
         key(KeyEvent.KEYCODE_DPAD_DOWN); assertTrue(monitor.controlsFocused)
         key(KeyEvent.KEYCODE_DPAD_UP); assertTrue(monitor.tiles.getValue("demo-16").isFocused)
         state.open("demo-3"); render(); monitor.focusControls()
+        key(KeyEvent.KEYCODE_DPAD_RIGHT); assertTrue(button("สลับ: 4 ช่อง").isFocused)
         key(KeyEvent.KEYCODE_DPAD_RIGHT); assertTrue(button("เลือกกล้อง").isFocused)
         key(KeyEvent.KEYCODE_DPAD_RIGHT); assertTrue(button("คุณภาพ: ปกติ").isFocused)
     }

@@ -70,7 +70,7 @@ class TvMonitorView(context: Context, private val events: Events) : FrameLayout(
         content.addView(bottom, LinearLayout.LayoutParams(-1, -2))
     }
 
-    fun render(state: TvViewingState, isDemo: Boolean, auto: Boolean, hd: Boolean, audible: Boolean) {
+    fun render(state: TvViewingState, isDemo: Boolean, tour: TvTourMode, hd: Boolean, audible: Boolean) {
         current = state
         demo.visibility = if (isDemo) View.VISIBLE else View.GONE
         heading.text = if (state.single) state.active?.name ?: "CameraHub" else "CameraHub."
@@ -113,7 +113,7 @@ class TvMonitorView(context: Context, private val events: Events) : FrameLayout(
         for ((id, tile) in tiles) state.cameras.find { it.id == id }?.let {
             tile.update(it, state.cameras.indexOf(it), state.single)
         }
-        buttons["auto"]?.text = if (auto) "สลับชุด: เปิด" else "สลับชุด: พัก"
+        buttons["auto"]?.text = tour.label
         buttons["audio"]?.apply {
             text = if (audible) "เสียง: เปิด" else "เสียง: ปิด"
             isEnabled = state.active?.audio == true; alpha = if (isEnabled) 1f else .4f
@@ -121,8 +121,10 @@ class TvMonitorView(context: Context, private val events: Events) : FrameLayout(
         buttons["ptz"]?.apply { isEnabled = state.active?.ptz == true; alpha = if (isEnabled) 1f else .4f }
         buttons["quality"]?.text = if (hd) "คุณภาพ: HD" else "คุณภาพ: ปกติ"
         if (!ptzMode) hint.text = if (state.single) "ลูกศรเลือกปุ่ม  ·  OK ใช้งาน  ·  กลับ ดู 4 ช่อง" else "ลูกศรเลือกกล้อง  ·  OK ดูเดี่ยว  ·  กดลงเพื่อเลือกชุดหรือรายชื่อ"
-        updateSummary(if (state.single) "${state.active?.modelLabel ?: ""}  ·  กล้อง ${state.cameras.indexOfFirst { it.id == state.activeId } + 1} / ${state.cameras.size}" else "4 ช่อง  ·  ชุด ${state.page + 1} / ${state.pageCount}  ·  ${state.cameras.size} กล้อง")
+        updateSummary(if (state.single) singleSummary(state) else "4 ช่อง  ·  ชุด ${state.page + 1} / ${state.pageCount}  ·  ${state.cameras.size} กล้อง")
     }
+    private fun singleSummary(state: TvViewingState) =
+        "${state.active?.modelLabel ?: ""}  ·  กล้อง ${state.cameras.indexOfFirst { it.id == state.activeId } + 1} / ${state.cameras.size}"
     fun updateSummary(value: String) { subtitle.text = value }
     fun showCatalogNotice(message: String?) {
         emptyState.text = message ?: "ยังไม่มีกล้อง\nเพิ่มกล้องจากมือถือหรือคอมพิวเตอร์ก่อน"
@@ -130,9 +132,9 @@ class TvMonitorView(context: Context, private val events: Events) : FrameLayout(
     fun updateClock(value: String) { clock.text = value }
     fun updateTour(seconds: Int?, paused: Boolean) {
         val state = current ?: return
-        if (state.single) return
         val tour = if (seconds == null) "พักการสลับ" else if (paused) "พักขณะใช้เมนู" else "เปลี่ยนใน $seconds วิ"
-        subtitle.text = "ชุด ${state.page + 1} / ${state.pageCount}  ·  ${state.cameras.size} กล้อง  ·  $tour"
+        subtitle.text = if (!state.single) "ชุด ${state.page + 1} / ${state.pageCount}  ·  ${state.cameras.size} กล้อง  ·  $tour"
+        else if (seconds == null) singleSummary(state) else "${singleSummary(state)}  ·  $tour"
     }
     private fun makeTile(id: String) = TvCameraTile(context, id).apply {
         setOnFocusChangeListener { _, focused -> focusStyle(focused); if (focused && !rebuilding) events.focusCamera(id) }
@@ -153,8 +155,8 @@ class TvMonitorView(context: Context, private val events: Events) : FrameLayout(
     }
     private fun buildControls(single: Boolean) {
         controls.removeAllViews(); buttons.clear()
-        val actions = if (single) listOf("grid" to "4 ช่อง", "picker" to "เลือกกล้อง", "audio" to "เสียง: ปิด", "ptz" to "หมุนกล้อง", "quality" to "คุณภาพ: ปกติ")
-        else listOf("previous" to "‹ ชุดก่อน", "next" to "ชุดถัด ›", "auto" to "สลับชุด: เปิด", "picker" to "เลือกกล้อง", "settings" to "ตั้งค่า")
+        val actions = if (single) listOf("grid" to "4 ช่อง", "auto" to TvTourMode.GRID.label, "picker" to "เลือกกล้อง", "audio" to "เสียง: ปิด", "ptz" to "หมุนกล้อง", "quality" to "คุณภาพ: ปกติ")
+        else listOf("previous" to "‹ ชุดก่อน", "next" to "ชุดถัด ›", "auto" to TvTourMode.GRID.label, "picker" to "เลือกกล้อง", "settings" to "ตั้งค่า")
         actions.forEachIndexed { index, (key, label) ->
             val b = s.button(label) { events.action(key) }
             buttons[key] = b

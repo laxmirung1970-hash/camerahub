@@ -8,5 +8,5 @@ try {
     New-Item -ItemType Directory -Force -Path (Join-Path $taskRoot 'releases') | Out-Null
     docker run --rm --env-file (Join-Path $taskRoot 'data/signing/signing.env') --mount "type=bind,source=$taskRoot\android-tv,target=/src" --mount "type=bind,source=$taskRoot\data\signing,target=/keys" --mount "type=bind,source=$taskRoot\releases,target=/out" --mount 'type=volume,source=camerahub-gradle,target=/gradle-cache' camerahub/android-builder:1 sh /src/build.sh
     if ($LASTEXITCODE -ne 0) { throw 'APK build or verification failed.' }
-    Write-Host 'APK: releases\camerahub-tv-1.1.0.apk'
+    Write-Host 'APK: releases\camerahub-tv-1.2.0.apk'
 } finally { Pop-Location }
