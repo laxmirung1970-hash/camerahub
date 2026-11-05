@@ -8,5 +8,7 @@ try {
     New-Item -ItemType Directory -Force -Path (Join-Path $taskRoot 'releases') | Out-Null
     docker run --rm --env-file (Join-Path $taskRoot 'data/signing/signing.env') --mount "type=bind,source=$taskRoot\android-tv,target=/src" --mount "type=bind,source=$taskRoot\data\signing,target=/keys" --mount "type=bind,source=$taskRoot\releases,target=/out" --mount 'type=volume,source=camerahub-gradle,target=/gradle-cache' camerahub/android-builder:1 sh /src/build.sh
     if ($LASTEXITCODE -ne 0) { throw 'APK build or verification failed.' }
+    # Stage it for TVs to update themselves from the hub (needs an app image rebuild).
+    & (Join-Path $PSScriptRoot 'Publish-TVUpdate.ps1')
     Write-Host 'APK: releases\camerahub-tv-1.3.1.apk'
 } finally { Pop-Location }

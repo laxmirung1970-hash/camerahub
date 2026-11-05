@@ -66,13 +66,20 @@ class MainActivity : Activity(), TvMonitorView.Events {
     private var catalogProblem: String? = null
     private var dialog: AlertDialog? = null
     private var connectButton: Button? = null
+    private lateinit var updater: TvUpdater
+    /** A newer build the hub offers; checked on start and every 6 h. */
+    private var update: TvUpdateInfo? = null
+    private var updateCheckedAt: Long? = null
+    private var updateOffered = 0L
+    private var updating = false
+    private var installWhenAllowed = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         @Suppress("DEPRECATION")
         window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-        s = TvStyle(this); store = SecureStore(this)
+        s = TvStyle(this); store = SecureStore(this); updater = TvUpdater(this)
         server = store.server; token = store.token()
         getPreferences(MODE_PRIVATE).let { tourMode = TvTourMode.from(it.getString("tourMode", null), it.getBoolean("autoTour", true)) }
         ptz = TvPtzController(
@@ -97,6 +104,8 @@ class MainActivity : Activity(), TvMonitorView.Events {
     override fun onResume() {
         super.onResume(); visible = true
         if (server.isNotBlank() && token.isNotBlank()) showHome() else showConnect()
+        // Back from the one-time "allow from this source" screen: carry on with the install.
+        if (installWhenAllowed && screen == Screen.HOME && updater.canInstall()) { installWhenAllowed = false; update?.let(::installUpdate) }
     }
     override fun onPause() {
         visible = false; generation++; cancelTasks(); leavePtz(); releasePlayers(); audible = false
@@ -266,12 +275,12 @@ class MainActivity : Activity(), TvMonitorView.Events {
         generation++; screen = Screen.HOME; cancelTasks(); leavePtz(); releasePlayers()
         audible = false; catalogProblem = null; tour.touch()
         monitor = TvMonitorView(this, this); setContentView(monitor)
-        renderHome(true); loadCameras()
+        renderHome(true); loadCameras(); checkUpdate()
         val gen = generation
         refreshTask = object : Runnable {
             override fun run() {
                 if (!visible || screen != Screen.HOME || gen != generation) return
-                loadCameras(); ui.postDelayed(this, 15_000)
+                loadCameras(); checkUpdate(); ui.postDelayed(this, 15_000)
             }
         }; ui.postDelayed(refreshTask!!, 15_000)
         heartbeat = object : Runnable {
@@ -426,10 +435,74 @@ class MainActivity : Activity(), TvMonitorView.Events {
             if (wasActive && visible && screen == Screen.HOME) monitor.focusCamera(viewing.activeId)
         }
     }
+    /** Throttled to every 6 h unless [manual]; a hub without an update answers 404 and nothing is shown. */
+    private fun checkUpdate(manual: Boolean = false) {
+        val now = SystemClock.elapsedRealtime()
+        if (!manual && !TvUpdateCheck.due(updateCheckedAt, now)) return
+        updateCheckedAt = now
+        val gen = generation; val address = server; val credential = token
+        io.execute {
+            val info = runCatching { TvUpdateCheck.parse(api("/tv/update", address = address, credential = credential)) }.getOrNull()
+            ui.post {
+                if (address != server || credential != token) return@post
+                val offer = TvUpdateCheck.offer(info, updater.installedCode()); update = offer
+                if (offer == null) {
+                    if (manual) toast(if (info == null) "เครื่องกลางยังไม่มีไฟล์อัปเดตทีวี หรือยังติดต่อไม่ได้" else "ใช้รุ่นล่าสุดอยู่แล้ว")
+                    return@post
+                }
+                if (!visible || gen != generation || screen != Screen.HOME || (!manual && updateOffered == offer.versionCode)) return@post
+                if (dialog == null && !monitor.hasOverlay && !monitor.ptzMode) offerUpdate(offer)
+            }
+        }
+    }
+    private fun offerUpdate(info: TvUpdateInfo) {
+        updateOffered = info.versionCode
+        val next = AlertDialog.Builder(this).setTitle("มีรุ่นใหม่ ${info.versionName} · กด OK เพื่ออัปเดต")
+            .setMessage("ทีวีจะดาวน์โหลดจากเครื่องกลาง ตรวจไฟล์ แล้วถามยืนยันการติดตั้ง\nการจับคู่และการตั้งค่าเดิมยังอยู่ครบ\n\nเลือกภายหลังได้จาก ตั้งค่า")
+            .setPositiveButton("อัปเดต") { _, _ -> installUpdate(info) }.setNegativeButton("ภายหลัง", null).create()
+        showDialog(next)
+        next.getButton(AlertDialog.BUTTON_POSITIVE)?.requestFocus()
+        // Nobody at the TV: close the offer so the tour keeps cycling.
+        ui.postDelayed({ if (dialog === next) next.dismiss() }, 60_000)
+    }
+    private fun installUpdate(info: TvUpdateInfo) {
+        if (updating) { toast("กำลังดาวน์โหลดรุ่นใหม่อยู่"); return }
+        updating = true; toast("กำลังดาวน์โหลดรุ่น ${info.versionName} จากเครื่องกลาง…")
+        val address = server; val credential = token
+        io.execute {
+            val result = runCatching { updater.download(address, credential, info) }
+            ui.post {
+                updating = false
+                result.onSuccess(::launchInstall).onFailure {
+                    toast((it as? IllegalStateException)?.message ?: "ดาวน์โหลดรุ่นใหม่ไม่สำเร็จ · ตรวจ Tailscale แล้วลองใหม่จาก ตั้งค่า")
+                }
+            }
+        }
+    }
+    private fun launchInstall(file: java.io.File) {
+        if (!visible) return
+        if (updater.canInstall()) { startInstaller(file); return }
+        installWhenAllowed = true
+        showDialog(AlertDialog.Builder(this).setTitle("อนุญาตการอัปเดต (ครั้งแรกครั้งเดียว)")
+            .setMessage("หน้าถัดไปให้เปิด ‘อนุญาตจากแหล่งนี้’ ของ CameraHub TV แล้วกด กลับ\nทีวีจะติดตั้งรุ่นใหม่ต่อเอง")
+            .setPositiveButton("ไปหน้าอนุญาต") { _, _ ->
+                runCatching { startActivity(updater.permissionIntent()) }.onFailure { installWhenAllowed = false; startInstaller(file) }
+            }.setNegativeButton("ภายหลัง") { _, _ -> installWhenAllowed = false }.create())
+    }
+    private fun startInstaller(file: java.io.File) {
+        runCatching { startActivity(updater.installIntent(file)) }.onFailure { toast("ทีวีนี้เปิดตัวติดตั้งแอปไม่ได้ · ใช้ Install-TV.cmd แทน") }
+    }
     private fun settings() {
         leavePtz()
-        showDialog(AlertDialog.Builder(this).setTitle("CameraHub TV").setItems(arrayOf("ลองเปิดภาพชุดนี้ใหม่", "วิธีใช้รีโมต", "เปลี่ยนเครื่องกลาง / จับคู่ใหม่", "เกี่ยวกับแอป")) { _, which ->
-            when (which) {
+        val offer = update
+        val shift = if (offer != null) 1 else 0
+        val items = listOfNotNull(offer?.let { "มีรุ่นใหม่ ${it.versionName} · กด OK เพื่ออัปเดต" }) +
+            listOf("ลองเปิดภาพชุดนี้ใหม่", "วิธีใช้รีโมต", "เปลี่ยนเครื่องกลาง / จับคู่ใหม่", "เกี่ยวกับแอป") +
+            listOfNotNull(if (offer == null) "ตรวจหารุ่นใหม่จากเครื่องกลาง" else null)
+        showDialog(AlertDialog.Builder(this).setTitle("CameraHub TV").setItems(items.toTypedArray()) { _, which ->
+            when (which - shift) {
+                -1 -> offer?.let(::installUpdate)
+                4 -> { toast("กำลังตรวจรุ่นใหม่…"); checkUpdate(manual = true) }
                 0 -> { players.values.forEach { it.playback.retry() }; loadCameras() }
                 1 -> ui.post { showDialog(AlertDialog.Builder(this).setTitle("รีโมต 3 ปุ่มก็ใช้ได้")
                     .setMessage("ลูกศร: เลือกกล้องหรือปุ่ม\nOK ที่ภาพ: ดูเดี่ยว\nกลับ: ออกจากหมุน → 4 ช่อง → ออกจากแอป\n\nกดลงจากแถวล่างเพื่อเปลี่ยนชุดหรือเลือกรายชื่อ\nปุ่มสลับ: 4 ช่อง → ทีละกล้อง → พัก\n4 ช่องเปลี่ยนทุก 30 วินาที ทีละกล้องทุก 12 วินาที หยุดขณะใช้เมนู\nแถบเมนูซ่อนเมื่อดูภาพเฉย ๆ กดปุ่มใดก็แสดงอีกครั้ง\n\nหมุนกล้อง: เลือก ‘หมุนกล้อง’ ก่อน กดลูกศรค้างแล้วปล่อยเพื่อหยุด\nChannel + / − ใช้เปลี่ยนชุดหรือกล้องได้ถ้ารีโมตมี")

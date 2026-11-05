@@ -37,6 +37,7 @@ Windows manual-IP live entry point: `compose.windows-live.yaml` uses the same am
 | GET `/api/xiaomi/accounts`, POST `/api/xiaomi/auth` | local gateway login, CAPTCHA/OTP continuation | owner, live only |
 | POST `/api/pair/request`, `/api/pair/poll` | request/wait for owner-approved TV pairing | public, rate limited + secret |
 | POST `/api/pair/approve`, GET `/api/pair/pending` | authorize a displayed code | owner |
+| GET `/api/tv/update`, `/api/tv/update.apk` | TV self-update: `{versionCode, versionName, sha256, size}` of the APK in `APP_TV_UPDATE_DIR` (default `/tv-update`, bundled by the Dockerfile from `tv-update/`; refused inside `APP_DATA`), 404 when none; sha256 computed by the hub; APK supports Range | owner / TV (not share) |
 | GET `/api/devices`, DELETE `/api/devices/{id}` | list/revoke paired TVs and share links (`kind`, `cameras`) | owner |
 | POST `/api/shares` | `{name, cameras:[id…]}` → view-only token scoped to 1–8 cameras, returned once; 365-day expiry | owner |
 | GET `/api/system`, PUT `/api/system/remote` | actual gateway health, app memory/events; saved HTTPS address | owner |

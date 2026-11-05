@@ -27,6 +27,8 @@ FROM scratch
 COPY --from=runtime-files /rootfs/ /
 COPY --from=backend /camerahub /usr/local/bin/camerahub
 COPY --from=web /build/dist /web
+# TV self-update APK from scripts/Publish-TVUpdate.ps1; README only when none was published.
+COPY tv-update/ /tv-update/
 COPY --chmod=755 deploy/app-entrypoint.sh /entrypoint.sh
 ENV APP_DATA=/data APP_WEB=/web APP_LISTEN=:8080
 EXPOSE 8080

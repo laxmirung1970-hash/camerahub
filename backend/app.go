@@ -137,6 +137,7 @@ func (a *App) handler(web string) http.Handler {
 	a.mediaRoutes(m)
 	a.pairRoutes(m)
 	a.backupRoutes(m)
+	a.tvUpdateRoutes(m)
 	m.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		jsonOut(w, 200, map[string]string{"status": "ok", "mode": a.mode, "version": appVersion})
 	})

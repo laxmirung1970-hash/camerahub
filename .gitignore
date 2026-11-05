@@ -2,6 +2,9 @@ node_modules/
 web/dist/
 data/
 releases/
+# TV self-update payload (scripts/Publish-TVUpdate.ps1); the README stays
+tv-update/*
+!tv-update/README.md
 android-tv/.gradle/
 android-tv/local.properties
 android-tv/app/build/

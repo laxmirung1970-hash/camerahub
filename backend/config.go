@@ -17,6 +17,8 @@ type config struct {
 	// Exact origins allowed to call the API with a Bearer token from another
 	// site (the Vercel-hosted UI). Empty keeps same-origin cookies only.
 	allowedOrigins map[string]bool
+	// Folder with the TV APK the hub offers paired TVs (tv_update.go).
+	tvUpdateDir string
 }
 
 func env(k, f string) string {
@@ -33,6 +35,7 @@ func loadConfig() config {
 		relayHostsFile: os.Getenv("CAMERAHUB_RELAY_HOSTS_FILE"),
 		trustedProxy:   os.Getenv("APP_TRUSTED_PROXY"),
 		allowedOrigins: parseOrigins(os.Getenv("APP_ALLOWED_ORIGINS")),
+		tvUpdateDir:    env("APP_TV_UPDATE_DIR", "/tv-update"),
 	}
 }
 
