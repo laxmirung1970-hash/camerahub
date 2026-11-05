@@ -47,8 +47,8 @@ function Start-WindowsRelay {
         $taskPort=[int](Get-NativeGatewaySettings).relay.port
         if (Get-NetTCPConnection -LocalPort $taskPort -State Listen -ErrorAction SilentlyContinue) { throw 'Relay port is occupied; no second relay was started.' }
         $taskScript=Join-Path $taskGatewayRoot 'scripts/windows-udp-relay.mjs'
-        # stderr kept so a relay crash leaves a reason (state folder is private, never published).
-        $taskProcess=Start-Process -FilePath $taskNode -ArgumentList @(('"'+$taskScript+'"'),('"'+$taskGatewaySettings+'"')) -WorkingDirectory $taskGatewayRoot -WindowStyle Hidden -RedirectStandardError (Join-Path $taskGatewayState 'relay-stderr.log') -PassThru
+        # No -Redirect*: redirection makes the relay inherit (and hold open) the caller's handles.
+        $taskProcess=Start-Process -FilePath $taskNode -ArgumentList @(('"'+$taskScript+'"'),('"'+$taskGatewaySettings+'"')) -WorkingDirectory $taskGatewayRoot -WindowStyle Hidden -PassThru
         [IO.File]::WriteAllText($taskPidFile,[string]$taskProcess.Id)
     }
     for ($taskTry=0;$taskTry -lt 10;$taskTry++) {if(Test-WindowsRelay){return};Start-Sleep -Milliseconds 300}
