@@ -10,7 +10,7 @@ services:
       APP_SECURE_COOKIES: "false"
       APP_WEBRTC: "false"
       # Vercel-hosted UI may call this backend with a Bearer token (see docs/REMOTE_SETUP.th.md).
-      APP_ALLOWED_ORIGINS: "https://camerahub-sigma.vercel.app,https://camerahub-lite.vercel.app"
+      APP_ALLOWED_ORIGINS: "https://camerahub-sigma.vercel.app"
     volumes: ["live-data:/data", "live-gateway:/gateway-state"]
     depends_on: [gateway]
     restart: unless-stopped
