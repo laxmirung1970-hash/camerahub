@@ -4,6 +4,7 @@ import type { Bootstrap, Camera, System } from "./api";
 import { api, onUnauthorized, tokenStore } from "./api";
 import { Auth } from "./Auth";
 import { CameraDetail } from "./CameraDetail";
+import type { CameraEdit } from "./CameraEditor";
 import { CameraPicker } from "./CameraPicker";
 import { Clock } from "./Clock";
 import { chooseStep, displayed, focusCamera, initialDisplay, reordered, toggleLocked } from "./displayState";
@@ -122,6 +123,11 @@ export default function App() {
     await api(`/cameras/${c.id}`, { name }, "PATCH");
     setCams((prev) => prev.map((x) => (x.id === c.id ? { ...x, name } : x)));
   };
+  const edit = async (c: Camera, change: CameraEdit) => {
+    await api(`/cameras/${c.id}`, change, "PATCH");
+    setCams((prev) => prev.map((x) => (x.id === c.id ? { ...x, ...change } : x)));
+    notify(change.group && change.group !== c.group ? `ย้าย ${change.name} ไปกลุ่ม ${change.group} แล้ว` : `บันทึก ${change.name} แล้ว`);
+  };
   const moveTo = async (id: string, index: number) => {
     if (ordering) return;
     const next = reordered(cams, filtered, id, index);
@@ -223,6 +229,7 @@ export default function App() {
               </div>
               <CameraPicker
                 cameras={filtered}
+                groups={groups}
                 selected={display.mode === "lock4" ? shown.map((c) => c.id) : []}
                 showing={shown.map((c) => c.id)}
                 owner={owner}
@@ -231,11 +238,11 @@ export default function App() {
                 onShowPage={(p) => changeDisplay(chooseStep(filtered, { ...display, mode: "lock4", lockedIds: null }, p))}
                 onToggle={toggle}
                 onFocus={(c) => changeDisplay(focusCamera(filtered, display, c.id))}
-                onRename={owner ? rename : undefined}
+                onEdit={owner ? edit : undefined}
                 onEditing={setEditingName}
                 onMoveTo={(id, i) => void moveTo(id, i)}
               />
-              <small className="muted">พิมพ์ที่ชื่อเพื่อแก้ · Enter บันทึก · ติ๊กเลือกล็อก 4 ภาพ</small>
+              <small className="muted">{owner ? "กดดินสอเพื่อแก้ชื่อหรือย้ายกลุ่ม · ติ๊กเลือกล็อก 4 ภาพ" : "ติ๊กเลือกล็อก 4 ภาพ"}</small>
             </div>
           </aside>
         )}

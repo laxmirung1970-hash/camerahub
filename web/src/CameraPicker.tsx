@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronUp, GripVertical, Scan } from "lucide-react";
+import { ChevronDown, ChevronUp, GripVertical, Pencil, Scan } from "lucide-react";
 import type { Camera } from "./api";
 import { statusLabel } from "./api";
-import { CameraName } from "./CameraName";
+import type { CameraEdit } from "./CameraEditor";
+import { CameraEditor } from "./CameraEditor";
 import { cameraModel } from "./cameraPresentation";
 import { PAGE_SIZE, pageCount } from "./monitoring";
 
 /** Flat list with a header per page of four, so ↑↓ and drag work across pages. */
 export function CameraPicker({
   cameras,
+  groups,
   selected,
   showing,
   owner,
@@ -17,11 +19,12 @@ export function CameraPicker({
   onShowPage,
   onToggle,
   onFocus,
-  onRename,
+  onEdit,
   onEditing,
   onMoveTo,
 }: {
   cameras: Camera[];
+  groups: string[];
   selected: string[];
   showing: string[];
   owner: boolean;
@@ -30,11 +33,18 @@ export function CameraPicker({
   onShowPage: (page: number) => void;
   onToggle: (id: string) => void;
   onFocus: (c: Camera) => void;
-  onRename?: (c: Camera, name: string) => Promise<void>;
+  onEdit?: (c: Camera, edit: CameraEdit) => Promise<void>;
   onEditing: (editing: boolean) => void;
   onMoveTo: (id: string, index: number) => void;
 }) {
   const [dragging, setDragging] = useState("");
+  const [editId, setEditId] = useState("");
+  // The tour pauses while an editor is open; the row vanishing (filter, hide) also closes it.
+  const editing = Boolean(editId) && cameras.some((c) => c.id === editId);
+  useEffect(() => {
+    onEditing(editing);
+    return () => onEditing(false);
+  }, [editing, onEditing]);
   const list = useRef<HTMLDivElement>(null);
   const restore = useRef<{ id: string; direction: string } | null>(null);
   const signature = cameras.map((c) => c.id).join("|");
@@ -91,8 +101,9 @@ export function CameraPicker({
                 onChange={() => onToggle(c.id)}
               />
               <div className="picker-body">
-                <CameraName camera={c} onSave={onRename} onEditing={onEditing} />
+                <strong className="readonly-camera-name">{c.name}</strong>
                 <small>
+                  {c.group && <span className="picker-group">{c.group} · </span>}
                   {cameraModel(c)} · <i className={`dot ${bridgeReady ? c.status : "pending"}`} />
                   {bridgeReady ? statusLabel(c.status) : "ระบบวิดีโอไม่พร้อม"}
                   {onScreen && " · บนจอ"}
@@ -103,6 +114,17 @@ export function CameraPicker({
               </button>
               {owner && (
                 <>
+                  {onEdit && (
+                    <button
+                      className={`icon-btn${editId === c.id ? " active" : ""}`}
+                      aria-label={`แก้ชื่อและกลุ่ม ${c.name}`}
+                      aria-expanded={editId === c.id}
+                      title="แก้ชื่อและกลุ่ม"
+                      onClick={() => setEditId(editId === c.id ? "" : c.id)}
+                    >
+                      <Pencil size={16} />
+                    </button>
+                  )}
                   <button
                     className="icon-btn"
                     data-order-step="up"
@@ -145,6 +167,7 @@ export function CameraPicker({
                 </>
               )}
             </div>
+            {onEdit && editId === c.id && <CameraEditor camera={c} groups={groups} onSave={onEdit} onClose={() => setEditId("")} />}
           </div>
         );
       })}

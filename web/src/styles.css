@@ -899,6 +899,47 @@ details > .stack {
   cursor: grab;
   color: var(--text-3);
 }
+.picker-row .icon-btn.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.picker-group {
+  color: var(--text);
+}
+.picker-edit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  margin: 0 var(--s2) var(--s2);
+  padding: var(--s3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r);
+  background: var(--bg-2);
+}
+.picker-edit label {
+  font-size: 0.8rem;
+}
+.picker-edit input {
+  background: var(--bg);
+  font-size: 1rem;
+}
+.picker-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s1);
+}
+.chip {
+  padding: 2px var(--s2);
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  color: var(--text-2);
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+.chip:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
 @media (max-width: 1279px) {
   .picker-row .grip {
     display: none;
