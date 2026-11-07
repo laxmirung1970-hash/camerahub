@@ -37,23 +37,34 @@ class TvViewingState {
         private set
     var single: Boolean = false
         private set
+    /** Pages of up to four; a page holds one group only, so the tour shows one group at a time. */
+    var pages: List<List<TvCamera>> = emptyList()
+        private set
     val active: TvCamera? get() = cameras.find { it.id == activeId }
-    val pageCount: Int get() = CameraPaging.count(cameras.size)
-    val showing: List<TvCamera> get() = if (single) listOfNotNull(active) else CameraPaging.items(cameras, page)
+    val pageCount: Int get() = CameraPaging.count(pages.size)
+    val showing: List<TvCamera> get() = if (single) listOfNotNull(active) else pages.getOrElse(page) { emptyList() }
+    /** "ชั้น 2 · ชุด 3 / 6"; the group is named once there is more than one. */
+    val pageLabel: String get() {
+        val group = pages.getOrNull(page)?.firstOrNull()?.group.orEmpty()
+        val named = group.isNotBlank() && cameras.any { it.group != group }
+        return (if (named) "$group  ·  " else "") + "ชุด ${page + 1} / $pageCount"
+    }
 
+    /** Cameras arrive in owner order; each group is made contiguous (see [CameraPaging.grouped]). */
     fun replace(next: List<TvCamera>) {
-        cameras = next.distinctBy { it.id }
+        cameras = CameraPaging.grouped(next.distinctBy { it.id }) { it.group }
+        pages = CameraPaging.pages(cameras) { it.group }
         if (single && cameras.none { it.id == activeId }) single = false
-        page = if (single) cameras.indexOfFirst { it.id == activeId } / CameraPaging.SIZE else CameraPaging.clamp(page, cameras.size)
+        page = if (single) pageOf(activeId) else CameraPaging.clamp(page, pages.size)
         if (showing.none { it.id == activeId }) activeId = showing.firstOrNull()?.id ?: ""
     }
+    private fun pageOf(id: String) = CameraPaging.pageOf(pages, cameras.indexOfFirst { it.id == id })
     fun focus(id: String) { if (showing.any { it.id == id }) activeId = id }
     fun open(id: String) {
-        val index = cameras.indexOfFirst { it.id == id }
-        if (index < 0) return
-        activeId = id; page = index / CameraPaging.SIZE; single = true
+        if (cameras.none { it.id == id }) return
+        activeId = id; page = pageOf(id); single = true
     }
-    fun grid() { single = false; page = CameraPaging.clamp(page, cameras.size) }
+    fun grid() { single = false; page = CameraPaging.clamp(page, pages.size) }
     /** One automatic tour move: next page of 4, or next camera full screen (entering single view first). */
     fun advance(mode: TvTourMode) {
         if (mode == TvTourMode.SINGLE && !single) (active ?: showing.firstOrNull())?.let { open(it.id) } else step(1)
@@ -64,7 +75,7 @@ class TvViewingState {
         val next = when {
             mode == TvTourMode.SINGLE && !single -> listOfNotNull(active ?: showing.firstOrNull())
             single -> listOf(cameras[Math.floorMod(cameras.indexOfFirst { it.id == activeId }.coerceAtLeast(0) + 1, cameras.size)])
-            else -> CameraPaging.items(cameras, CameraPaging.next(page, 1, cameras.size))
+            else -> pages.getOrElse(CameraPaging.next(page, 1, pages.size)) { emptyList() }
         }
         return next.filter { n -> showing.none { it.id == n.id } }
     }
@@ -74,7 +85,7 @@ class TvViewingState {
             val index = cameras.indexOfFirst { it.id == activeId }.coerceAtLeast(0)
             open(cameras[Math.floorMod(index + delta, cameras.size)].id)
         } else {
-            page = CameraPaging.next(page, delta, cameras.size)
+            page = CameraPaging.next(page, delta, pages.size)
             activeId = showing.firstOrNull()?.id ?: ""
         }
     }
@@ -109,13 +120,13 @@ class TvTourClock(private val now: () -> Long) {
     fun touch() { touchedAt = now() }
     fun secondsLeft(mode: TvTourMode = TvTourMode.GRID): Int = ((mode.intervalMs - (now() - touchedAt)).coerceAtLeast(0) + 999).div(1000).toInt()
     /** A camera opened by hand in GRID mode stays put; SINGLE mode also moves from the grid into single view. */
-    fun running(mode: TvTourMode, single: Boolean, count: Int): Boolean = when (mode) {
+    fun running(mode: TvTourMode, single: Boolean, count: Int, pages: Int = (count + CameraPaging.SIZE - 1) / CameraPaging.SIZE): Boolean = when (mode) {
         TvTourMode.OFF -> false
-        TvTourMode.GRID -> !single && count > CameraPaging.SIZE
+        TvTourMode.GRID -> !single && pages > 1
         TvTourMode.SINGLE -> count > 1 || (count == 1 && !single)
     }
-    fun due(mode: TvTourMode, single: Boolean, blocked: Boolean, count: Int): Boolean =
-        running(mode, single, count) && !blocked && secondsLeft(mode) == 0
+    fun due(mode: TvTourMode, single: Boolean, blocked: Boolean, count: Int, pages: Int = (count + CameraPaging.SIZE - 1) / CameraPaging.SIZE): Boolean =
+        running(mode, single, count, pages) && !blocked && secondsLeft(mode) == 0
 }
 
 /** Plays slightly fast while more than 3 s is buffered, back to normal under 1.5 s. */

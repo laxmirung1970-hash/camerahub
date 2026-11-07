@@ -72,7 +72,11 @@ class MainActivity : Activity(), TvMonitorView.Events {
     private var updateCheckedAt: Long? = null
     private var updateOffered = 0L
     private var updating = false
-    private var installWhenAllowed = false
+    /** Version waiting for "allow from this source"; kept in preferences because the TV may stop the app meanwhile. */
+    private var installWhenAllowed: Long
+        get() = getPreferences(MODE_PRIVATE).getLong("pendingUpdate", 0)
+        set(value) { getPreferences(MODE_PRIVATE).edit().putLong("pendingUpdate", value).apply() }
+    private companion object { const val ALLOW_INSTALL = 41 }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -104,8 +108,7 @@ class MainActivity : Activity(), TvMonitorView.Events {
     override fun onResume() {
         super.onResume(); visible = true
         if (server.isNotBlank() && token.isNotBlank()) showHome() else showConnect()
-        // Back from the one-time "allow from this source" screen: carry on with the install.
-        if (installWhenAllowed && screen == Screen.HOME && updater.canInstall()) { installWhenAllowed = false; update?.let(::installUpdate) }
+        resumeInstall()
     }
     override fun onPause() {
         visible = false; generation++; cancelTasks(); leavePtz(); releasePlayers(); audible = false
@@ -288,12 +291,12 @@ class MainActivity : Activity(), TvMonitorView.Events {
                 if (!visible || screen != Screen.HOME || gen != generation) return
                 val blocked = monitor.hasOverlay || monitor.controlsFocused || monitor.ptzMode || dialog != null || !windowFocused
                 if (blocked) tour.touch()
-                if (tour.due(tourMode, viewing.single, blocked, viewing.cameras.size)) tourStep()
-                else if (!blocked && tour.running(tourMode, viewing.single, viewing.cameras.size) && tour.secondsLeft(tourMode) <= 15) warmNext()
+                if (tour.due(tourMode, viewing.single, blocked, viewing.cameras.size, viewing.pageCount)) tourStep()
+                else if (!blocked && tour.running(tourMode, viewing.single, viewing.cameras.size, viewing.pageCount) && tour.secondsLeft(tourMode) <= 15) warmNext()
                 if (!blocked && monitor.cameraFocused && SystemClock.elapsedRealtime() - lastKeyAt >= 8000) monitor.showChrome(false)
                 monitor.updateClock(SimpleDateFormat("HH:mm", Locale.US).format(Date()))
                 if (catalogProblem != null) monitor.updateSummary(catalogProblem!!)
-                else monitor.updateTour(if (tour.running(tourMode, viewing.single, viewing.cameras.size)) tour.secondsLeft(tourMode) else null, blocked)
+                else monitor.updateTour(if (tour.running(tourMode, viewing.single, viewing.cameras.size, viewing.pageCount)) tour.secondsLeft(tourMode) else null, blocked)
                 ui.postDelayed(this, 1000)
             }
         }; lastKeyAt = SystemClock.elapsedRealtime(); ui.post(heartbeat!!)
@@ -446,7 +449,9 @@ class MainActivity : Activity(), TvMonitorView.Events {
             ui.post {
                 if (address != server || credential != token) return@post
                 val offer = TvUpdateCheck.offer(info, updater.installedCode()); update = offer
+                if (offer != null && offer.versionCode == installWhenAllowed && updater.canInstall()) { resumeInstall(); return@post }
                 if (offer == null) {
+                    if (info != null && installWhenAllowed != 0L) installWhenAllowed = 0
                     if (manual) toast(if (info == null) "เครื่องกลางยังไม่มีไฟล์อัปเดตทีวี หรือยังติดต่อไม่ได้" else "ใช้รุ่นล่าสุดอยู่แล้ว")
                     return@post
                 }
@@ -473,21 +478,30 @@ class MainActivity : Activity(), TvMonitorView.Events {
             val result = runCatching { updater.download(address, credential, info) }
             ui.post {
                 updating = false
-                result.onSuccess(::launchInstall).onFailure {
+                result.onSuccess { launchInstall(it, info) }.onFailure {
                     toast((it as? IllegalStateException)?.message ?: "ดาวน์โหลดรุ่นใหม่ไม่สำเร็จ · ตรวจ Tailscale แล้วลองใหม่จาก ตั้งค่า")
                 }
             }
         }
     }
-    private fun launchInstall(file: java.io.File) {
+    /** Back from "allow from this source": carry on. After the TV stopped the app, the start-up check brings [update] back. */
+    private fun resumeInstall() {
+        val pending = installWhenAllowed
+        if (pending == 0L || !visible || screen != Screen.HOME || !updater.canInstall()) return
+        if (pending <= updater.installedCode()) { installWhenAllowed = 0; return }
+        val offer = update?.takeIf { it.versionCode == pending } ?: return
+        installWhenAllowed = 0; installUpdate(offer)
+    }
+    private fun launchInstall(file: java.io.File, info: TvUpdateInfo) {
         if (!visible) return
         if (updater.canInstall()) { startInstaller(file); return }
-        installWhenAllowed = true
+        installWhenAllowed = info.versionCode
         showDialog(AlertDialog.Builder(this).setTitle("อนุญาตการอัปเดต (ครั้งแรกครั้งเดียว)")
             .setMessage("หน้าถัดไปให้เปิด ‘อนุญาตจากแหล่งนี้’ ของ CameraHub TV แล้วกด กลับ\nทีวีจะติดตั้งรุ่นใหม่ต่อเอง")
             .setPositiveButton("ไปหน้าอนุญาต") { _, _ ->
-                runCatching { startActivity(updater.permissionIntent()) }.onFailure { installWhenAllowed = false; startInstaller(file) }
-            }.setNegativeButton("ภายหลัง") { _, _ -> installWhenAllowed = false }.create())
+                // For result, so Back from the settings page returns here instead of the TV home screen.
+                runCatching { startActivityForResult(updater.permissionIntent(), ALLOW_INSTALL) }.onFailure { installWhenAllowed = 0; startInstaller(file) }
+            }.setNegativeButton("ภายหลัง") { _, _ -> installWhenAllowed = 0 }.create())
     }
     private fun startInstaller(file: java.io.File) {
         runCatching { startActivity(updater.installIntent(file)) }.onFailure { toast("ทีวีนี้เปิดตัวติดตั้งแอปไม่ได้ · ใช้ Install-TV.cmd แทน") }

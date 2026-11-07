@@ -35,6 +35,23 @@ class TvViewingStateTest {
         state.step(-1); state.grid()
         assertEquals(4, state.page); assertEquals("id16", state.activeId)
     }
+    @Test fun pagesFollowGroupsAndTourShowsOneGroupAtATime() {
+        val owner = listOf("a1" to "ชั้นล่าง", "b1" to "ชั้นบน", "a2" to "ชั้นล่าง", "a3" to "ชั้นล่าง", "a4" to "ชั้นล่าง", "a5" to "ชั้นล่าง", "c1" to "", "b2" to "ชั้นบน")
+            .map { (id, group) -> TvCamera(id, id, group = group) }
+        val state = TvViewingState().apply { replace(owner) }
+        assertEquals(listOf(listOf("a1", "a2", "a3", "a4"), listOf("a5"), listOf("b1", "b2"), listOf("c1")), state.pages.map { p -> p.map { it.id } })
+        assertEquals("ชั้นล่าง  ·  ชุด 1 / 4", state.pageLabel)
+        assertEquals(listOf("a5"), state.upcoming(TvTourMode.GRID).map { it.id })
+        state.step(2); assertEquals("ชั้นบน  ·  ชุด 3 / 4", state.pageLabel); state.step(1); assertEquals("ชุด 4 / 4", state.pageLabel)
+        state.open("b2"); assertEquals(2, state.page); state.step(1); assertEquals("c1", state.activeId); assertEquals(3, state.page)
+        // Single tour walks the grouped order too.
+        assertEquals(listOf("a1", "a2", "a3", "a4", "a5", "b1", "b2", "c1"), state.cameras.map { it.id })
+        // Two groups of two: four cameras but two pages, so the grid tour still runs.
+        val two = TvViewingState().apply { replace(owner.filter { it.id in setOf("a1", "a2", "b1", "b2") }) }
+        var now = 0L; val clock = TvTourClock({ now }); now = 30_000
+        assertEquals(2, two.pageCount); assertTrue(clock.due(TvTourMode.GRID, false, false, 4, two.pageCount))
+        assertEquals("ชุด 1 / 1", TvViewingState().apply { replace(owner.filter { it.group == "ชั้นล่าง" }.take(3)) }.pageLabel)
+    }
     @Test fun partialGridHasNoUnreachableCameraOrFocusTrap() {
         assertEquals(1, TvGridFocus.target(0, 4, TvGridFocus.Direction.RIGHT))
         assertEquals(3, TvGridFocus.target(1, 4, TvGridFocus.Direction.DOWN))

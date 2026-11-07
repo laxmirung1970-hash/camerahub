@@ -121,7 +121,7 @@ class TvMonitorView(context: Context, private val events: Events) : FrameLayout(
         buttons["ptz"]?.apply { isEnabled = state.active?.ptz == true; alpha = if (isEnabled) 1f else .4f }
         buttons["quality"]?.text = if (hd) "คุณภาพ: HD" else "คุณภาพ: ปกติ"
         if (!ptzMode) hint.text = if (state.single) "ลูกศรเลือกปุ่ม  ·  OK ใช้งาน  ·  กลับ ดู 4 ช่อง" else "ลูกศรเลือกกล้อง  ·  OK ดูเดี่ยว  ·  กดลงเพื่อเลือกชุดหรือรายชื่อ"
-        updateSummary(if (state.single) singleSummary(state) else "4 ช่อง  ·  ชุด ${state.page + 1} / ${state.pageCount}  ·  ${state.cameras.size} กล้อง")
+        updateSummary(if (state.single) singleSummary(state) else "4 ช่อง  ·  ${state.pageLabel}  ·  ${state.cameras.size} กล้อง")
     }
     private fun singleSummary(state: TvViewingState) =
         "${state.active?.modelLabel ?: ""}  ·  กล้อง ${state.cameras.indexOfFirst { it.id == state.activeId } + 1} / ${state.cameras.size}"
@@ -133,7 +133,7 @@ class TvMonitorView(context: Context, private val events: Events) : FrameLayout(
     fun updateTour(seconds: Int?, paused: Boolean) {
         val state = current ?: return
         val tour = if (seconds == null) "พักการสลับ" else if (paused) "พักขณะใช้เมนู" else "เปลี่ยนใน $seconds วิ"
-        subtitle.text = if (!state.single) "ชุด ${state.page + 1} / ${state.pageCount}  ·  ${state.cameras.size} กล้อง  ·  $tour"
+        subtitle.text = if (!state.single) "${state.pageLabel}  ·  ${state.cameras.size} กล้อง  ·  $tour"
         else if (seconds == null) singleSummary(state) else "${singleSummary(state)}  ·  $tour"
     }
     private fun makeTile(id: String) = TvCameraTile(context, id).apply {
