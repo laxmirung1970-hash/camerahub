@@ -10,5 +10,5 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'APK build or verification failed.' }
     # Stage it for TVs to update themselves from the hub (needs an app image rebuild).
     & (Join-Path $PSScriptRoot 'Publish-TVUpdate.ps1')
-    Write-Host 'APK: releases\camerahub-tv-1.3.1.apk'
+    Write-Host 'APK: releases\camerahub-tv-1.3.2.apk'
 } finally { Pop-Location }
