@@ -82,7 +82,7 @@ it("refuses an empty name, keeps the editor open on save errors, and closes on E
 });
 
 it("shows the group on each row and hides the pencil for viewers", () => {
-  render(
+  const { container } = render(
     <CameraPicker
       cameras={cams}
       groups={[]}
@@ -98,6 +98,31 @@ it("shows the group on each row and hides the pencil for viewers", () => {
       onMoveTo={() => {}}
     />,
   );
-  expect(screen.getAllByText("ชั้นล่าง ·")).toHaveLength(2);
+  expect([...container.querySelectorAll(".picker-group")].map((el) => el.textContent?.trim())).toEqual(["ชั้นล่าง ·", "ชั้นล่าง ·", "ชั้นบน ·"]);
   expect(screen.queryByRole("button", { name: /แก้ชื่อและกลุ่ม/ })).toBeNull();
+});
+
+it("starts a new page for each group and names the group in the page header", () => {
+  const onShowPage = vi.fn();
+  render(
+    <CameraPicker
+      cameras={cams}
+      groups={[]}
+      selected={[]}
+      showing={[]}
+      owner={false}
+      ordering={false}
+      bridgeReady
+      onShowPage={onShowPage}
+      onToggle={() => {}}
+      onFocus={() => {}}
+      onEditing={() => {}}
+      onMoveTo={() => {}}
+    />,
+  );
+  // Three cameras in two groups: ชั้นล่าง (2) then ชั้นบน (1) = two pages, not one.
+  const headers = screen.getAllByText(/หน้า \d/).map((el) => el.textContent?.replace(/\s+/g, " "));
+  expect(headers).toEqual(["ชั้นล่าง · หน้า 1 / 2", "ชั้นบน · หน้า 2 / 2"]);
+  fireEvent.click(screen.getAllByRole("button", { name: "แสดง" })[1]);
+  expect(onShowPage).toHaveBeenCalledWith(1);
 });

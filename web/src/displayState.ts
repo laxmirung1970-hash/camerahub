@@ -1,5 +1,5 @@
 import type { Camera } from "./api";
-import { cameraPage, clampPage, pageCount } from "./monitoring";
+import { cameraPage, clampPage, pageCount, pageOf } from "./monitoring";
 
 export type DisplayMode = "tour4" | "tour1" | "lock4" | "focus";
 export interface DisplayState {
@@ -46,14 +46,14 @@ export function chooseMode(
     cameras[0];
   return {
     mode,
-    page: first ? Math.floor(cameras.indexOf(first) / 4) : 0,
+    page: first ? pageOf(cameras, cameras.indexOf(first)) : 0,
     focusId: first?.id || "",
     lockedIds:
       mode === "lock4"
         ? isSingle(state.mode)
           ? cameraPage(
               cameras,
-              Math.floor(Math.max(0, cameras.indexOf(first)) / 4),
+              pageOf(cameras, Math.max(0, cameras.indexOf(first))),
             ).map((c) => c.id)
           : visible.map((c) => c.id)
         : null,
@@ -71,12 +71,12 @@ export function chooseStep(
     );
     return {
       ...state,
-      page: Math.floor(position / 4),
+      page: pageOf(cameras, position),
       focusId: cameras[position]?.id || "",
       lockedIds: null,
     };
   }
-  const page = clampPage(index, cameras.length);
+  const page = clampPage(index, cameras);
   return {
     ...state,
     page,
@@ -94,13 +94,13 @@ export function advance(
 ): DisplayState {
   const total = isSingle(state.mode)
     ? Math.max(1, cameras.length)
-    : pageCount(cameras.length);
+    : pageCount(cameras);
   const current = isSingle(state.mode)
     ? Math.max(
         0,
         cameras.findIndex((c) => c.id === displayed(cameras, state)[0]?.id),
       )
-    : clampPage(state.page, cameras.length);
+    : clampPage(state.page, cameras);
   return chooseStep(
     cameras,
     state,
@@ -119,7 +119,7 @@ export function focusCamera(
         ...state,
         mode: "focus",
         focusId: id,
-        page: Math.floor(index / 4),
+        page: pageOf(cameras, index),
         lockedIds: null,
       };
 }

@@ -5,7 +5,7 @@ import { statusLabel } from "./api";
 import type { CameraEdit } from "./CameraEditor";
 import { CameraEditor } from "./CameraEditor";
 import { cameraModel } from "./cameraPresentation";
-import { PAGE_SIZE, pageCount } from "./monitoring";
+import { pagesOf } from "./monitoring";
 
 /** Flat list with a header per page of four, so ↑↓ and drag work across pages. */
 export function CameraPicker({
@@ -60,19 +60,24 @@ export function CameraPicker({
     });
     row.scrollIntoView({ block: "nearest" });
   }, [ordering, signature]);
-  const pages = pageCount(cameras.length);
+  // Pages never mix groups; the header names the group once the list has more than one.
+  const pages = cameras.length ? pagesOf(cameras) : [];
+  const grouped = new Set(cameras.map((c) => c.group)).size > 1;
   return (
     <div ref={list} className="picker-list" aria-label="รายชื่อกล้อง">
       {cameras.length === 0 && <p className="muted">ไม่พบกล้องที่ตรงกับการค้นหา</p>}
-      {cameras.map((c, index) => {
-        const page = Math.floor(index / PAGE_SIZE);
+      {pages.flatMap((rows, page) => rows.map((c, i) => {
+        const index = cameras.indexOf(c);
         const checked = selected.includes(c.id);
         const onScreen = showing.includes(c.id);
         return (
           <div key={c.id}>
-            {index % PAGE_SIZE === 0 && (
+            {i === 0 && (
               <div className="picker-page">
-                <span>หน้า {page + 1}{pages > 1 ? ` / ${pages}` : ""}</span>
+                <span>
+                  {grouped && c.group && <strong>{c.group} · </strong>}
+                  หน้า {page + 1}{pages.length > 1 ? ` / ${pages.length}` : ""}
+                </span>
                 <button className="text-btn" onClick={() => onShowPage(page)}>
                   แสดง
                 </button>
@@ -170,7 +175,7 @@ export function CameraPicker({
             {onEdit && editId === c.id && <CameraEditor camera={c} groups={groups} onSave={onEdit} onClose={() => setEditId("")} />}
           </div>
         );
-      })}
+      }))}
     </div>
   );
 }

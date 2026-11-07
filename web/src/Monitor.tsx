@@ -57,10 +57,13 @@ export function Monitor({
   const single = isSingle(state.mode),
     rotating = isTour(state.mode);
   const view = displayed(cameras, state);
-  const count = single ? cameras.length : pageCount(cameras.length);
+  const count = single ? cameras.length : pageCount(cameras);
   const current = single
     ? Math.max(0, cameras.findIndex((c) => c.id === view[0]?.id))
-    : clampPage(state.page, cameras.length);
+    : clampPage(state.page, cameras);
+  // Pages follow groups, so the page label can name the group when there is more than one.
+  const grouped = new Set(cameras.map((c) => c.group)).size > 1;
+  const pageGroup = !single && grouped ? view[0]?.group : "";
   const signature = cameras.map((c) => c.id).join("|");
   const running = rotating && active && !tourPaused && visible && count > 1;
   useEffect(() => {
@@ -134,6 +137,7 @@ export function Monitor({
           </button>
           <span className="pager-label" aria-live="polite">
             {single ? "กล้อง" : "หน้า"} {Math.min(current + 1, count)} / {count}
+            {pageGroup && <small className="pager-group"> · {pageGroup}</small>}
           </span>
           <button className="icon-btn" onClick={() => turn(1)} disabled={count < 2} aria-label={single ? "กล้องถัดไป" : "หน้าถัดไป"}>
             <ChevronRight size={20} />

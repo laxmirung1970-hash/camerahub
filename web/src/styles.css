@@ -899,6 +899,14 @@ details > .stack {
   cursor: grab;
   color: var(--text-3);
 }
+.picker-page strong,
+.pager-group {
+  color: var(--text);
+  font-weight: 600;
+}
+.pager-group {
+  font-size: 0.85em;
+}
 .picker-row .icon-btn.active {
   background: var(--accent-soft);
   color: var(--accent);

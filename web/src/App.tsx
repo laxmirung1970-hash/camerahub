@@ -11,7 +11,7 @@ import { chooseStep, displayed, focusCamera, initialDisplay, reordered, toggleLo
 import type { DisplayState } from "./displayState";
 import { useMediaQuery } from "./hooks";
 import { Monitor } from "./Monitor";
-import { PAGE_SIZE } from "./monitoring";
+import { PAGE_SIZE, groupedOrder } from "./monitoring";
 import { SettingsModal } from "./settings/SettingsModal";
 import { Logo, Spinner, Toast } from "./ui";
 import type { ToastMessage } from "./ui";
@@ -104,7 +104,8 @@ export default function App() {
 
   const groups = [...new Set(cams.map((c) => c.group))].sort();
   const q = search.trim().toLowerCase();
-  const filtered = cams.filter((c) => (!group || c.group === group) && (!q || `${c.name} ${c.model} ${c.group}`.toLowerCase().includes(q)));
+  // Pages of four never mix groups, so the list is shown in group order (owner order inside each group).
+  const filtered = groupedOrder(cams.filter((c) => (!group || c.group === group) && (!q || `${c.name} ${c.model} ${c.group}`.toLowerCase().includes(q))));
   const shown = displayed(filtered, display);
   const current = cams.find((c) => c.id === detail);
   const changeDisplay = (next: DisplayState) => {
@@ -242,7 +243,7 @@ export default function App() {
                 onEditing={setEditingName}
                 onMoveTo={(id, i) => void moveTo(id, i)}
               />
-              <small className="muted">{owner ? "กดดินสอเพื่อแก้ชื่อหรือย้ายกลุ่ม · ติ๊กเลือกล็อก 4 ภาพ" : "ติ๊กเลือกล็อก 4 ภาพ"}</small>
+              <small className="muted">{owner ? "กดดินสอเพื่อแก้ชื่อหรือย้ายกลุ่ม · กล้องกลุ่มเดียวกันอยู่หน้าเดียวกัน · ติ๊กเลือกล็อก 4 ภาพ" : "ติ๊กเลือกล็อก 4 ภาพ"}</small>
             </div>
           </aside>
         )}
