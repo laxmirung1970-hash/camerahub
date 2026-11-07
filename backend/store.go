@@ -263,6 +263,10 @@ func mergeCameraRecord(c, old Camera, exists bool) Camera {
 		c.AudioVerified = old.AudioVerified
 		c.PTZVerified = old.PTZVerified
 		c.PlaybackMode = old.PlaybackMode
+		c.Hidden = old.Hidden
+		if c.Vendor == "xiaomi" && !old.Audio {
+			c.Audio = false
+		}
 		if c.Vendor == "xiaomi" && old.Source.PTZProtocol != "" {
 			c.Source.PTZProtocol = old.Source.PTZProtocol
 			c.PTZ = old.PTZ

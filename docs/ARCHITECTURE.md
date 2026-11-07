@@ -21,8 +21,8 @@ Windows manual-IP live entry point: `compose.windows-live.yaml` uses the same am
 | GET `/api/bootstrap`, `/api/health` | mode, setup/login state; process health | public, no secrets |
 | POST `/api/setup`, `/api/login` | bootstrap-code owner setup; password login | rate limited |
 | POST `/api/logout` | revoke caller session | authenticated |
-| GET `/api/cameras` | metadata and capability/verification flags; a share link sees only its cameras, without `host`/`ref` | owner / TV / share |
-| PATCH `/api/cameras/{id}` | label, room, favorite, playback/PTZ profile, manual field verification | owner |
+| GET `/api/cameras` | metadata and capability/verification flags; a share link sees only its cameras, without `host`/`ref`; cameras the owner removed (`hidden`) are left out, and `?hidden=1` lists only those, for the owner to restore | owner / TV / share |
+| PATCH `/api/cameras/{id}` | label, room, favorite, playback/PTZ profile, manual field verification; `hidden` removes/restores a camera from every list (discovery keeps the row and the flag, so a sync does not bring it back); Xiaomi `audio:false` registers the source with `audio=0`, because go2rtc's Xiaomi probe fails with "no audio" when the camera's microphone is off | owner |
 | POST `/api/cameras/{id}/probe` | negotiate a real video consumer; does not certify audio/PTZ | owner |
 | POST `/api/cameras/{id}/ptz` | `{direction:left/right/up/down/stop}` | owner / TV |
 | GET `/api/cameras/{id}/ws` | authenticated MSE WebSocket; allowlisted negotiation messages | owner / TV / share (scoped) |

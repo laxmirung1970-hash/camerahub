@@ -23,6 +23,7 @@ type Camera struct {
 	AudioVerified bool      `json:"audioVerified"`
 	PTZVerified   bool      `json:"ptzVerified"`
 	PlaybackMode  string    `json:"playbackMode"`
+	Hidden        bool      `json:"hidden,omitempty"` // owner removed it; discovery keeps the row so a sync cannot re-add it
 	LastSeen      time.Time `json:"lastSeen"`
 	Source        Source    `json:"-"`
 }

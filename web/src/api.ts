@@ -19,6 +19,7 @@ export interface Camera {
   verification: string;
   audioVerified: boolean;
   ptzVerified: boolean;
+  hidden?: boolean;
 }
 export interface Bootstrap {
   mode: "demo" | "live";

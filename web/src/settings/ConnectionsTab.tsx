@@ -18,10 +18,21 @@ export function ConnectionsTab({ boot, data, busy, action, notify, refresh }: Ta
   const [destination, setDestination] = useState("");
   const [accounts, setAccounts] = useState<string[]>([]);
   const [account, setAccount] = useState("");
+  const [hidden, setHidden] = useState<Camera[]>([]);
   const live = boot.mode === "live";
   useEffect(() => {
     if (live) void api<string[]>("/xiaomi/accounts").then(setAccounts).catch(() => {});
   }, [live]);
+  useEffect(() => {
+    void api<Camera[]>("/cameras?hidden=1").then(setHidden).catch(() => {});
+  }, []);
+  const restore = (c: Camera) =>
+    void action(async () => {
+      await api(`/cameras/${c.id}`, { hidden: false }, "PATCH");
+      setHidden((list) => list.filter((x) => x.id !== c.id));
+      await refresh();
+      notify(`นำ ${c.name} กลับเข้ารายการแล้ว`);
+    });
   const withTimeout = async <T,>(ms: number, fn: (signal: AbortSignal) => Promise<T>) => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), ms);
@@ -316,6 +327,23 @@ export function ConnectionsTab({ boot, data, busy, action, notify, refresh }: Ta
                 onClick={() => void action(() => api("/connections/" + c.id + "/toggle", { enabled: !c.enabled }))}
               >
                 {c.enabled ? "เปิดอยู่" : "หยุดอยู่"}
+              </button>
+            </div>
+          ))}
+        </section>
+      )}
+      {hidden.length > 0 && (
+        <section className="stack">
+          <h3>กล้องที่ถอดออกจากรายการ</h3>
+          {hidden.map((c) => (
+            <div className="row between" key={c.id}>
+              <span>
+                <strong>{c.name}</strong>
+                <br />
+                <small className="muted">ไม่แสดงในหน้ารวม ทีวี และลิงก์แชร์ · การค้นหากล้องจะไม่ดึงกลับมาเอง</small>
+              </span>
+              <button className="btn small" disabled={busy} onClick={() => restore(c)}>
+                นำกลับ
               </button>
             </div>
           ))}

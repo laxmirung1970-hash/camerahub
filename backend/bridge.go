@@ -110,6 +110,16 @@ func (b *Bridge) ensure(ctx context.Context, c Camera, q string) error {
 	if src == "" {
 		return errors.New("camera source not configured")
 	}
+	// go2rtc's Xiaomi probe fails with "no audio" when the camera's microphone
+	// is off; the owner marks such a camera as video-only.
+	if c.Vendor == "xiaomi" && !c.Audio && strings.HasPrefix(src, "xiaomi://") {
+		if u, err := url.Parse(src); err == nil {
+			qs := u.Query()
+			qs.Set("audio", "0")
+			u.RawQuery = qs.Encode()
+			src = u.String()
+		}
+	}
 	name := streamName(c, q)
 	if c.Verification == "demo" {
 		// Share each fixture producer. Separate FFmpeg producers with identical

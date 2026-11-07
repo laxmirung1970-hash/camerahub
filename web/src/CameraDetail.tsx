@@ -67,7 +67,7 @@ export function CameraDetail({
           group: f.get("group"),
           playbackMode: f.get("playbackMode"),
           ...(live ? { audioVerified: f.get("audioVerified") === "on", ptzVerified: f.get("ptzVerified") === "on" } : {}),
-          ...(live && c.vendor === "xiaomi" ? { ptzProtocol: f.get("ptzProtocol") } : {}),
+          ...(live && c.vendor === "xiaomi" ? { ptzProtocol: f.get("ptzProtocol"), audio: f.get("videoOnly") !== "on" } : {}),
         },
         "PATCH",
       );
@@ -75,6 +75,14 @@ export function CameraDetail({
       notify("บันทึกกล้องแล้ว");
     });
   };
+  const [confirmHide, setConfirmHide] = useState(false);
+  const hide = () =>
+    run("hide", async () => {
+      await api(`/cameras/${c.id}`, { hidden: true }, "PATCH");
+      notify(`ถอด ${c.name} ออกจากรายการแล้ว นำกลับได้ที่ ตั้งค่า › เชื่อมกล้อง`);
+      onClose();
+      await refresh();
+    });
   return (
     <aside
       ref={root}
@@ -183,6 +191,12 @@ export function CameraDetail({
                 </select>
               </label>
             )}
+            {live && c.vendor === "xiaomi" && (
+              <label className="check">
+                <input type="checkbox" name="videoOnly" defaultChecked={!c.audio} />
+                กล้องนี้ไม่ส่งเสียง · เปิดเฉพาะภาพ (ใช้เมื่อปิดไมค์ไว้แล้วภาพไม่ขึ้น)
+              </label>
+            )}
             {live && (
               <>
                 <label className="check">
@@ -220,6 +234,24 @@ export function CameraDetail({
               บันทึก
             </button>
           </form>
+          <div className="row wrap">
+            {confirmHide ? (
+              <>
+                <small className="muted">ซ่อนจากหน้ารวม ทีวี และลิงก์แชร์ ไม่ลบข้อมูล นำกลับได้ภายหลัง</small>
+                <button className="btn small" disabled={busy === "hide"} onClick={() => void hide()}>
+                  {busy === "hide" ? <Spinner size={14} /> : null}
+                  ยืนยันถอดออก
+                </button>
+                <button className="btn small" onClick={() => setConfirmHide(false)}>
+                  ยกเลิก
+                </button>
+              </>
+            ) : (
+              <button className="btn small" onClick={() => setConfirmHide(true)}>
+                ถอดกล้องนี้ออกจากรายการ
+              </button>
+            )}
+          </div>
         </details>
       )}
     </aside>

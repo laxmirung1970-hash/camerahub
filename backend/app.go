@@ -258,6 +258,15 @@ func (a *App) listCameras(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principalOf(r)
+	// ?hidden=1 lists only the cameras the owner removed, for restoring them.
+	wantHidden := r.URL.Query().Get("hidden") == "1" && p.Kind == "owner"
+	visible := cs[:0]
+	for _, c := range cs {
+		if c.Hidden == wantHidden {
+			visible = append(visible, c)
+		}
+	}
+	cs = visible
 	if p.Cameras != nil {
 		// Share links see only their cameras and never the LAN address or device id.
 		scoped := []Camera{}
@@ -280,6 +289,8 @@ func (a *App) patchCamera(w http.ResponseWriter, r *http.Request) {
 		AudioVerified *bool   `json:"audioVerified"`
 		PTZVerified   *bool   `json:"ptzVerified"`
 		PlaybackMode  *string `json:"playbackMode"`
+		Hidden        *bool   `json:"hidden"`
+		Audio         *bool   `json:"audio"`
 	}
 	if !readJSON(w, r, &b) {
 		return
@@ -329,6 +340,16 @@ func (a *App) patchCamera(w http.ResponseWriter, r *http.Request) {
 		}
 		if b.PTZVerified != nil {
 			c.PTZVerified = *b.PTZVerified && c.PTZ
+		}
+		if b.Hidden != nil {
+			c.Hidden = *b.Hidden
+		}
+		// Only Xiaomi takes audio from the owner; Tapo reports it over ONVIF.
+		if b.Audio != nil && c.Vendor == "xiaomi" {
+			c.Audio = *b.Audio
+			if !c.Audio {
+				c.AudioVerified = false
+			}
 		}
 	})
 	if errors.Is(err, sql.ErrNoRows) {
@@ -474,7 +495,9 @@ func (a *App) registerAllStreams(ctx context.Context) {
 		return
 	}
 	for _, c := range cs {
-		_ = a.bridge.ensure(ctx, c, "low")
+		if !c.Hidden {
+			_ = a.bridge.ensure(ctx, c, "low")
+		}
 	}
 }
 func (a *App) scheduledSync(ctx context.Context, vendor string, timeout time.Duration) {
